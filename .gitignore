@@ -1,0 +1,26 @@
+# Dados pessoais: backups, exportações e extratos nunca vão para o GitHub.
+# Guarde esses arquivos na pasta privado/ (ou fora do repositório).
+privado/
+fintrix-backup-*.json
+fintrix-*.csv
+*.ofx
+
+# Arquivos gerados
+dist/
+/pwa/
+test/tmp/
+test/ui/index.html
+test/ui/shots/
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Sistema e editores
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp

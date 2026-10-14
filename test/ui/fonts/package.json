@@ -1,0 +1,10 @@
+{
+  "name": "fintrix-test-fonts",
+  "private": true,
+  "description": "Fontes do app servidas localmente nos testes de interface (opcional: sem elas o teste usa as fontes do sistema)",
+  "dependencies": {
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0"
+  }
+}

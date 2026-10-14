@@ -1,0 +1,276 @@
+"""Testes das funções da 1.1: orçamento com histórico (e a migração v1 → v2), patrimônio e metas, comprovantes
+e importação de extrato/fatura (OFX e CSV de vários bancos). Uso: python3 v11.py [arquivo .html ou pasta com index.html]   (padrão: o index.html da raiz do repositório)"""
+import json, pathlib, sys, threading, time, functools, http.server, re, shutil, io, zipfile, datetime
+from playwright.sync_api import sync_playwright
+from PIL import Image
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from gerar import gerar
+AQUI = pathlib.Path(__file__).parent; TMP = AQUI / "tmp"; TMP.mkdir(exist_ok=True)
+ARG = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else AQUI.parent / "index.html").resolve()
+if ARG.is_file(): WWW = TMP / "www11"; WWW.mkdir(exist_ok=True); shutil.copy(ARG, WWW / "index.html")
+else: WWW = ARG
+falhas, oks, erros = [], 0, []
+def ok(c, m):
+    global oks
+    if c: oks += 1; print("  ok ·", m)
+    else: falhas.append(m); print("  FALHOU ·", m)
+class H(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *a): pass
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 8801), functools.partial(H, directory=str(WWW)))
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+URL = "http://localhost:8801/"
+def arq(nome, conteudo, enc="utf-8"):
+    p = TMP / nome
+    if isinstance(conteudo, bytes): p.write_bytes(conteudo)
+    else: p.write_text(conteudo, encoding=enc)
+    return str(p)
+def nova(ctx, rot):
+    pg = ctx.new_page()
+    pg.on("pageerror", lambda e: erros.append(f"{rot}: {e}"))
+    pg.on("console", lambda m: m.type == "error" and not any(x in m.text for x in ("fonts.g", "ERR_", "Failed to load resource")) and erros.append(f"{rot} console: {m.text}"))
+    pg.goto(URL); return pg
+def pronto(pg):
+    pg.wait_for_function("typeof S !== 'undefined' && S.fase === 'pronto' && Object.keys(S.anos).length >= (C().anos||[]).length", timeout=20000)
+    pg.evaluate("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+def restaurar(pg, caminho):
+    pg.set_input_files("#imp-json", caminho); pg.wait_for_selector("#f-rest"); pg.click('[data-act="restaurar-ok"]'); pg.wait_for_selector("#f-rest", state="detached"); pronto(pg)
+def ir(pg, v): pg.evaluate(f"irPara('{v}')")
+HOJE = datetime.date.today(); MH = HOJE.strftime("%Y-%m")
+def madd(k, n): y, m = map(int, k.split("-")); t = y * 12 + m - 1 + n; return f"{t // 12}-{t % 12 + 1:02d}"
+def esperar_foco(pg, id="m-valor"): pg.wait_for_function(f"document.activeElement && document.activeElement.id === '{id}'")  # a janela foca um campo 40 ms depois de abrir
+
+base = gerar(anos=(int(MH[:4]) - 1, int(MH[:4])), por_mes=12, seed=7)
+f_base = arq("base11.json", json.dumps(base))
+
+with sync_playwright() as p:
+    b = p.chromium.launch()
+
+    print("\n1. orçamento com histórico (e migração dos limites antigos)")
+    ctx = b.new_context(viewport={"width": 1300, "height": 900}); pg = nova(ctx, "orçamento")
+    pg.wait_for_selector('[data-act="onb-restaurar"]'); restaurar(pg, f_base)
+    ok(pg.evaluate("C().versao") == 2 and pg.evaluate("JSON.stringify(C().orc.c1)") == '{"0000-01":120000}', "backup v1: limite antigo vira vigência desde sempre")
+    ok(pg.evaluate(f"limiteEm('c1', '{MH}') === 120000 && limiteEm('c1', '2001-01') === 120000"), "limite antigo vale em qualquer mês")
+    M, M2, M3 = MH, madd(MH, 2), madd(MH, 1)
+    def limite(mes, valor):
+        pg.evaluate(f"S.mes = '{mes}'; irPara('orcamento')")
+        inp = pg.locator('input[data-orc="c4"]'); inp.click(); inp.fill(valor); inp.press("Enter")
+        pg.wait_for_timeout(250)
+    limite(M, "50000")
+    ok(pg.evaluate(f"[limiteEm('c4', '{madd(M, -1)}'), limiteEm('c4', '{M}'), limiteEm('c4', '{madd(M, 6)}')].join()") == "40000,50000,50000", "deste mês em diante: muda daqui para frente, o passado fica")
+    pg.click('[data-act="orc-escopo"][data-v="mes"]')
+    limite(M2, "90000")
+    ok(pg.evaluate(f"[limiteEm('c4', '{M3}'), limiteEm('c4', '{M2}'), limiteEm('c4', '{madd(M2, 1)}')].join()") == "50000,90000,50000", "só neste mês: o mês seguinte volta ao valor de antes")
+    pg.click('[data-act="orc-escopo"][data-v="seguintes"]')
+    limite(M3, "70000")
+    ok(pg.evaluate(f"[limiteEm('c4', '{M}'), limiteEm('c4', '{M3}'), limiteEm('c4', '{M2}'), limiteEm('c4', '{madd(M2, 3)}')].join()") == "50000,70000,70000,70000", "deste mês em diante substitui a exceção marcada para depois")
+    ok(pg.evaluate("Object.keys(C().orc.c4).length") == 3, f"vigências guardadas sem repetição: {pg.evaluate('JSON.stringify(C().orc.c4)')}")
+    pg.evaluate(f"S.mes = '{M3}'; irPara('orcamento')")
+    ok("50.000" not in pg.inner_text(".orc-hist") and pg.query_selector_all(".orc-hist tbody tr") and pg.query_selector(".orc-hist td small"), "tabela do histórico do ano com gasto e limite de cada mês")
+    ok(f"{['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'][int(M[5:]) - 1]}/{M[2:4]}: R$ 500,00" in pg.inner_text("#content").replace("\xa0", " "), "a linha mostra o limite do mês anterior quando ele mudou")
+    # aviso de limite na janela usa o limite do mês do lançamento
+    pg.evaluate(f"S.mes = '{M2}'; irPara('geral'); abrirLanc({{ tipo: 'despesa' }})"); esperar_foco(pg)
+    pg.fill("#m-valor", "85000"); pg.select_option("#m-cat", "c4"); pg.evaluate("v => { const e = document.querySelector('#m-data'); e.value = v; e.dispatchEvent(new Event('change', { bubbles: true })); }", f"{M2}-15"); pg.dispatch_event("#m-valor", "input")
+    pg.wait_for_timeout(150); t2 = pg.inner_text("#m-orc")
+    pg.evaluate("v => { const e = document.querySelector('#m-data'); e.value = v; e.dispatchEvent(new Event('change', { bubbles: true })); }", f"{madd(M, -1)}-15"); pg.wait_for_timeout(150); t1 = pg.inner_text("#m-orc")
+    ok("R$ 700,00" in t2.replace("\xa0", " ") and "R$ 400,00" in t1.replace("\xa0", " "), "aviso de limite da janela usa o limite do mês do lançamento")
+    pg.keyboard.press("Escape")
+    pg.evaluate(f"abrirCatDet('c4', 'despesa', '{M[:4]}-01', true)"); pg.wait_for_selector(".cd-mini line", state="attached")
+    ok(len(pg.query_selector_all(".cd-mini line")) >= 1, "janela da categoria no ano marca o limite de cada mês")
+    pg.keyboard.press("Escape")
+    ctx.close()
+
+    print("\n2. patrimônio e metas")
+    ctx = b.new_context(viewport={"width": 1300, "height": 900}); pg = nova(ctx, "patrimônio")
+    pg.wait_for_selector('[data-act="onb-conta"]'); pg.click('[data-act="onb-conta"]'); pg.fill("#o-nome", "Corrente"); pg.fill("#o-saldo", "100000"); pg.click('[data-act="onb-criar"]'); pronto(pg)
+    cc = pg.evaluate("Object.keys(C().contas)[0]")
+    pg.evaluate("abrirConta()"); esperar_foco(pg, "c-nome"); pg.fill("#c-nome", "Tesouro"); pg.select_option("#c-tipo", "investimento"); pg.fill("#c-ini", "500000"); pg.click('[data-act="conta-salvar"]'); pg.wait_for_function("Object.keys(C().contas).length === 2")
+    inv = pg.evaluate("Object.keys(C().contas).find(id => C().contas[id].tipo === 'investimento')")
+    pg.evaluate("abrirCartao()"); esperar_foco(pg, "k-nome"); pg.fill("#k-nome", "Roxo"); pg.fill("#k-fech", "3"); pg.fill("#k-venc", "10"); pg.click('[data-act="cartao-salvar"]'); pg.wait_for_function("Object.keys(C().cartoes).length === 1")
+    pg.evaluate("abrirLanc({ tipo: 'cartao' })"); esperar_foco(pg); pg.fill("#m-valor", "30000"); pg.select_option("#m-cat", index=1); pg.keyboard.press("Enter"); pg.wait_for_function("D.L.length === 1")
+    pg.evaluate(f"abrirLanc({{ tipo: 'transf', preset: {{ conta: '{cc}', para: '{inv}' }} }})"); esperar_foco(pg); pg.fill("#m-valor", "20000"); pg.keyboard.press("Enter"); pg.wait_for_function("D.L.length === 2")
+    ir(pg, "contas"); ok(pg.query_selector(f'[data-act="invest"][data-id="{inv}"]') is not None and pg.query_selector(f'[data-act="ajustar"][data-id="{inv}"]') is None, "conta de investimento tem Atualizar valor em vez de Ajustar saldo")
+    pg.click(f'[data-act="invest"][data-id="{inv}"]'); esperar_foco(pg, "iv-v"); pg.fill("#iv-v", "530000"); pg.wait_for_timeout(100)
+    ok("rendimento de +R$ 100,00" in pg.inner_text("#iv-h").replace("\xa0", " "), "a janela mostra o rendimento antes de salvar")
+    pg.click('[data-act="invest-salvar"]'); pg.wait_for_function("D.L.length === 3")
+    ok(pg.evaluate(f"D.L.some(l => l.rend && l.ajuste && l.valor === 10000 && l.conta === '{inv}')") and pg.evaluate(f"totais(itensMes('{MH}')).rec") == 0, "rendimento gravado como ajuste: fora das receitas dos relatórios")
+    ir(pg, "patrimonio"); txt = pg.inner_text("#content").replace("\xa0", " ")
+    ok(pg.evaluate("$('#monthnav').hidden") and "Não entram: contas correntes" in txt, "tela Patrimônio (sem o seletor de mês; avisa que conta corrente e cartão não entram)")
+    s = pg.evaluate("(() => { derivar(); const s = seriePatrimonio([mk(today())]); return s[0]; })()")
+    ok(s["contas"] == 0 and s["inv"] == 530000 and "divida" not in s and s["liq"] == 530000 and s["rend"] == 10000 and s["aporte"] == 20000, f"patrimônio = contas que guardam dinheiro + investido, sem conta corrente nem cartão ({s['liq']}), aporte e rendimento do mês")
+    ok("R$ 5.300,00" in txt and "R$ 200,00" in txt, "KPIs da tela")
+    ok(pg.query_selector(".chart polyline") is not None and pg.query_selector(".tab-patr tbody tr") is not None, "gráfico de evolução e tabela mês a mês")
+    pg.click('[data-act="meta-nova"] >> nth=0'); esperar_foco(pg, "mt-nome"); pg.fill("#mt-nome", "Reserva"); pg.fill("#mt-alvo", "1000000"); pg.fill("#mt-data", madd(MH, 9))
+    ok(pg.is_checked(f'.mt-contas input[value="{inv}"]') and not pg.is_checked(f'.mt-contas input[value="{cc}"]'), "meta nova já marca as contas de investimento")
+    pg.click('[data-act="meta-salvar"]'); pg.wait_for_function("Object.keys(C().metas || {}).length === 1 && !janelaAberta() && !!document.querySelector('.meta')")
+    mt = pg.inner_text(".meta").replace("\xa0", " ")
+    ok("53%" in mt and "R$ 5.300,00" in mt and "R$ 470,00" in mt, f"meta: progresso e quanto guardar por mês ({mt.splitlines()[2] if len(mt.splitlines()) > 2 else mt})")
+    pg.click(".meta"); esperar_foco(pg, "mt-nome"); pg.fill("#mt-alvo", "400000"); pg.click('[data-act="meta-salvar"]')
+    pg.wait_for_function("!janelaAberta() && document.querySelector('.meta')?.innerText.includes('Meta alcançada')", timeout=5000)
+    ok(True, "meta alcançada")
+    pg.click(".meta"); pg.click('[data-act="meta-excluir"]'); pg.wait_for_function("!Object.keys(C().metas || {}).length")
+    ok(True, "meta excluída")
+    pg.set_viewport_size({"width": 390, "height": 844}); ir(pg, "patrimonio")
+    ok(pg.evaluate("document.querySelector('#content').scrollWidth <= document.querySelector('#content').clientWidth + 1"), "Patrimônio no celular sem rolagem lateral")
+    pg.click('[data-act="mais-menu"]'); ok(pg.query_selector('#menu [data-view="patrimonio"]') is not None, "Patrimônio no menu Mais do celular"); pg.keyboard.press("Escape")
+    ctx.close()
+
+    print("\n3. comprovantes")
+    img = Image.new("RGB", (3200, 2400), (200, 120, 40)); bio = io.BytesIO(); img.save(bio, "PNG"); f_png = arq("foto.png", bio.getvalue())
+    pdf = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj 3 0 obj<</Type/Page/MediaBox[0 0 200 200]/Parent 2 0 R>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF"
+    f_pdf = arq("nota fiscal.pdf", pdf)
+    ctx = b.new_context(viewport={"width": 1300, "height": 900})
+    ctx.add_init_script("window.showDirectoryPicker = async () => (await navigator.storage.getDirectory()).getDirectoryHandle('bk', { create: true });")
+    pg = nova(ctx, "comprovantes"); pg.wait_for_selector('[data-act="onb-conta"]'); pg.click('[data-act="onb-conta"]'); pg.fill("#o-nome", "C"); pg.click('[data-act="onb-criar"]'); pronto(pg)
+    pg.evaluate("abrirLanc({ tipo: 'despesa' })"); esperar_foco(pg); pg.fill("#m-valor", "4590"); pg.fill("#m-desc", "Farmácia"); pg.select_option("#m-cat", index=1)
+    pg.evaluate("document.querySelector('details.more').open = true")
+    pg.set_input_files("#m-anx-in", [f_png, f_pdf]); pg.wait_for_function("MS.anexos.length === 2")
+    pg.click('[data-act="m-salvar"]:not([data-novo])'); pg.wait_for_function("D.L.length === 1")
+    an = pg.evaluate("D.L[0].anexos")
+    ok(len(an) == 2 and an[0]["tipo"] == "image/jpeg" and an[0]["nome"] == "foto.jpg" and an[0]["tam"] < 400000 and an[1]["tipo"] == "application/pdf", f"dois comprovantes; a foto grande foi reduzida ({an[0]['tam'] // 1024} kB, JPEG)")
+    dims = pg.evaluate(f"anexoGet('{an[0]['id']}').then(r => createImageBitmap(r.blob)).then(b => [b.width, b.height])")
+    ok(dims == [2000, 1500], f"foto reduzida para 2000 px no lado maior {dims}")
+    ir(pg, "lanc"); ok(pg.query_selector(".row .tag svg") is not None, "a linha do lançamento mostra o clipe")
+    pg.click('.row .grow[data-act="abrir"]'); pg.wait_for_selector(".anx-n")
+    pg.click(".anx-n >> nth=0"); pg.wait_for_selector("#anx-view img")
+    pg.keyboard.press("Escape"); ok(pg.query_selector("#anx-view") is None and pg.query_selector("#f-lanc") is not None, "Esc fecha o comprovante e mantém o lançamento aberto")
+    pg.keyboard.press("Escape")
+    ir(pg, "config"); pg.wait_for_function("ANX.pronto && ANX.n === 2")
+    pg.wait_for_function("document.querySelector('.dados-st').innerText.includes('2 arquivos')")
+    with pg.expect_download() as dl: pg.click('[data-act="anx-zip"]')
+    zp = TMP / "comp.zip"; dl.value.save_as(zp); z = zipfile.ZipFile(zp); nomes = z.namelist()
+    ok(z.testzip() is None and "comprovantes.json" in nomes and len([n for n in nomes if n.startswith("comprovantes/")]) == 2, f".zip válido com os 2 comprovantes e o índice")
+    pg.evaluate(f"anxTx('readwrite', st => st.clear())"); pg.evaluate("atualizarAnexosInfo()"); pg.wait_for_function("ANX.faltam === 2")
+    ok("não estão neste aparelho" in pg.inner_text(".dados-st"), "avisa quando os comprovantes não estão no aparelho")
+    pg.set_input_files("#imp-zip", str(zp)); pg.wait_for_function("ANX.faltam === 0 && ANX.n === 2")
+    ok(True, "Restaurar .zip devolve os comprovantes")
+    # pasta do backup automático
+    pg.click('[data-act="bk-pasta"]'); pg.wait_for_function("bkEstado()?.via === 'auto' && !BK.gravando")
+    na_pasta = pg.evaluate("(async () => { const d = await (await (await navigator.storage.getDirectory()).getDirectoryHandle('bk')).getDirectoryHandle('comprovantes'); const o = []; for await (const [n] of d.entries()) o.push(n); return o; })()")
+    ok(len(na_pasta) == 2 and all("__" in n for n in na_pasta), f"backup automático copia os comprovantes para a pasta {na_pasta}")
+    pg.evaluate("anxTx('readwrite', st => st.clear())"); pg.evaluate("atualizarAnexosInfo()"); pg.wait_for_function("ANX.faltam === 2"); pg.evaluate("render()")
+    pg.click('[data-act="anx-pasta"]'); pg.wait_for_function("ANX.faltam === 0")
+    ok(True, "Recuperar da pasta devolve os comprovantes")
+    pg.evaluate(f"anxTx('readwrite', st => st.put({{ id: 'xorfao1', nome: 'velho.pdf', tipo: 'application/pdf', tam: 10, criado: Date.now() - 3 * 864e5, blob: new Blob(['x']) }}))")
+    pg.evaluate("atualizarAnexosInfo()"); pg.wait_for_function("ANX.orfaos.length === 1"); pg.evaluate("render()")
+    pg.click('[data-act="anx-orfaos"]'); pg.wait_for_function("ANX.orfaos.length === 0 && ANX.n === 2")
+    ok(True, "apaga arquivos sem lançamento")
+    pg.click('[data-act="apagar-tudo"]'); pg.fill("#ap-c", "APAGAR"); pg.click('[data-act="apagar-confirma"]'); pg.wait_for_selector('[data-act="onb-restaurar"]')
+    ok(pg.evaluate("anexoIds().then(x => x.length)") == 0, "apagar tudo apaga os comprovantes")
+    ctx.close()
+
+    print("\n4. importação: OFX de conta")
+    ctx = b.new_context(viewport={"width": 1300, "height": 900}); pg = nova(ctx, "importar")
+    pg.wait_for_selector('[data-act="onb-restaurar"]'); restaurar(pg, f_base)
+    a1 = "a1"
+    d = lambda n: (HOJE - datetime.timedelta(days=n)).strftime("%Y-%m-%d")
+    ofx_d = lambda n: (HOJE - datetime.timedelta(days=n)).strftime("%Y%m%d")
+    # um lançamento manual que vai aparecer no extrato e uma referência de categoria
+    pg.evaluate(f"lancSave({{ id: 'man1', tipo: 'despesa', conta: 'a1', cartao: null, cat: 'c2', valor: 4210, desc: 'Posto', data: '{d(2)}', comp: '{d(2)[:7]}', pago: true, tags: [], obs: '', criado: Date.now() }})")
+    pg.evaluate(f"lancSave({{ id: 'ref1', tipo: 'despesa', conta: 'a1', cartao: null, cat: 'c1s', valor: 3000, desc: 'IFOOD *PIZZARIA', data: '{d(40)}', comp: '{d(40)[:7]}', pago: true, tags: [], obs: '', criado: Date.now() }})")
+    pronto(pg)
+    ofx = f"""OFXHEADER:100\r\nDATA:OFXSGML\r\nVERSION:102\r\nENCODING:USASCII\r\nCHARSET:1252\r\n\r\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><CURDEF>BRL<BANKTRANLIST>
+<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>{ofx_d(1)}120000[-3:BRT]<TRNAMT>-58.90<FITID>A001<MEMO>IFOOD *RESTAURANTE SÃO JOÃO
+<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>{ofx_d(3)}<TRNAMT>-42.10<FITID>A002<MEMO>POSTO SHELL
+<STMTTRN><TRNTYPE>CREDIT<DTPOSTED>{ofx_d(4)}<TRNAMT>6543.21<FITID>A003<MEMO>SALARIO EMPRESA
+<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>{ofx_d(5)}<TRNAMT>-1234.56<FITID>A004<MEMO>Pagamento de fatura
+<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>{ofx_d(6)}<TRNAMT>-200.00<FITID>A005<NAME>TED ENVIADA<MEMO>Inter
+</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>"""
+    f_ofx = arq("extrato.ofx", ofx, "cp1252")
+    pg.click('[data-act="novo-menu"]'); pg.click('#menu [data-act="importar"]'); pg.wait_for_selector("#imp-dest")
+    pg.select_option("#imp-dest", "a1"); pg.set_input_files("#imp-arq", f_ofx); pg.wait_for_selector(".imp-row")
+    rows = pg.evaluate("MS.rows.map(r => ({ desc: r.desc, v: r.v, tipo: r.tipo, cat: r.cat, st: r.status, sel: r.sel }))")
+    ok(rows[0]["desc"] == "IFOOD *RESTAURANTE SÃO JOÃO", "OFX em windows-1252 com acentos")
+    ok(rows[0]["cat"] == "c1s" and rows[0]["tipo"] == "despesa" and rows[0]["v"] == 5890, "categoria sugerida pelo histórico (IFOOD → Mercado)")
+    ok(rows[1]["st"] == "duplicado" and not rows[1]["sel"] and "Posto" in pg.inner_text(".imp-row >> nth=1"), "lançamento já feito à mão aparece como 'parece já lançada', desmarcado")
+    ok(rows[2]["tipo"] == "receita" and rows[2]["v"] == -654321 and rows[2]["cat"] == "r1", "entrada vira receita (Salário pelo histórico)")
+    ok(rows[3]["tipo"] == "t:k1", "'Pagamento de fatura' sugere pagar o cartão da conta")
+    ok(rows[4]["desc"] == "TED ENVIADA - Inter", "NAME e MEMO juntos quando diferem")
+    pg.select_option('.imp-row[data-i="4"] select[data-imp="tipo"]', "t:a2")
+    pg.click('[data-act="imp-ok"]'); pg.wait_for_function("S.view === 'lanc'")
+    novos = pg.evaluate("D.L.filter(l => l.imp).map(l => ({ tipo: l.tipo, conta: l.conta, destino: l.destino, fatPag: l.fatPag, valor: l.valor, cat: l.cat }))")
+    ok(len(novos) == 4, f"4 lançamentos importados ({len(novos)})")
+    ok(any(n["tipo"] == "transf" and n["destino"] == "k1" and n["fatPag"] for n in novos) and any(n["tipo"] == "transf" and n["destino"] == "a2" and n["valor"] == 20000 for n in novos), "pagamento de fatura e transferência importados como transferências")
+    ok(pg.evaluate("S.f.conta") == "a1", "abre Lançamentos filtrado pela conta e pelo período")
+    pg.click('#toast [data-act="toast-acao"]'); pg.wait_for_function("!D.L.some(l => l.imp)")
+    ok(True, "Desfazer apaga a importação")
+    pg.evaluate("abrirImportar('a1')"); pg.set_input_files("#imp-arq", f_ofx); pg.wait_for_selector(".imp-row")
+    pg.click('[data-act="imp-ok"]'); pg.wait_for_timeout(150)
+    ok("Escolha a categoria de 1 lançamento" in pg.inner_text("#m-err") and pg.query_selector(".imp-row.falta"), "linha sem categoria segura a importação e fica destacada")
+    pg.select_option('.imp-row[data-i="4"] select[data-imp="tipo"]', "t:a2")
+    pg.click('[data-act="imp-ok"]'); pg.wait_for_function("D.L.filter(l => l.imp).length === 4")
+    pg.evaluate("abrirImportar('a1')"); pg.set_input_files("#imp-arq", f_ofx); pg.wait_for_selector(".imp-row")
+    ok(pg.evaluate("MS.rows.filter(r => r.status === 'importado').length") == 4 and pg.evaluate("MS.rows.filter(r => r.sel).length") == 0, "importar o mesmo arquivo de novo: tudo aparece como já importado")
+    pg.keyboard.press("Escape")
+
+    print("\n5. importação: CSV de bancos diferentes")
+    nub = "Data,Valor,Identificador,Descrição\n" + "\n".join(f"{(HOJE - datetime.timedelta(days=i + 10)).strftime('%d/%m/%Y')},{v},{i:08x}-aaaa,{t}" for i, (v, t) in enumerate([("-25.90", "Compra no débito - Padaria Pão Quente"), ("1500.00", "Transferência recebida pelo Pix - FULANO"), ("-1234.50", "Pagamento de boleto efetuado - CONDOMINIO")]))
+    pg.evaluate("abrirImportar('a1')"); pg.set_input_files("#imp-arq", arq("nubank.csv", nub)); pg.wait_for_selector("#ic-data")
+    ok(pg.input_value("#ic-data") == "0" and pg.input_value("#ic-valor") == "1" and pg.input_value("#ic-desc") == "3" and pg.input_value("#ic-dec") == ".", "CSV do Nubank (conta): colunas e ponto decimal reconhecidos")
+    pg.click('[data-act="imp-colunas-ok"]'); pg.wait_for_selector(".imp-row")
+    ok(pg.evaluate("MS.rows.map(r => r.v).join()") == "2590,-150000,123450", "valores e sinais do CSV")
+    semcat = pg.evaluate("MS.rows.filter(r => r.sel && !r.cat).length")
+    pg.click('[data-act="imp-ok"]'); pg.wait_for_timeout(200)
+    ok(semcat == 0 or "Escolha a categoria" in pg.inner_text("#m-err"), "sem categoria não importa (pede para escolher)")
+    if semcat:
+        for bse in ("despesa", "receita"):
+            if pg.query_selector(f"#imp-lote-{bse}"): pg.select_option(f"#imp-lote-{bse}", index=1); pg.click(f'[data-act="imp-lote"][data-b="{bse}"]')
+    pg.click('[data-act="imp-ok"]'); pg.wait_for_function("S.view === 'lanc' && !janelaAberta()")
+    ok(pg.evaluate("D.L.filter(l => l.imp?.arq === 'nubank.csv').length") == 3, "CSV importado")
+    pg.evaluate("abrirImportar('a1')"); pg.set_input_files("#imp-arq", arq("nubank2.csv", nub.replace("Padaria", "Padaria Nova"))); pg.wait_for_selector(".imp-row")
+    ok(True, "mesmo banco de novo: vai direto para a revisão (lembra as colunas)"); pg.keyboard.press("Escape")
+    inter = "Extrato Conta Corrente \nConta ;123456\nPeríodo ;01/09/2026 a 30/09/2026\n\nData Lançamento;Histórico;Descrição;Valor;Saldo\n" + \
+        f"{(HOJE - datetime.timedelta(days=2)).strftime('%d/%m/%Y')};Pix enviado ;Maria Souza;-1.250,00;3.000,00\n{(HOJE - datetime.timedelta(days=1)).strftime('%d/%m/%Y')};Compra no débito;MERCADO BOM PRECO;-87,35;2.912,65\n"
+    pg.evaluate("abrirImportar('a2')"); pg.set_input_files("#imp-arq", arq("inter.csv", inter, "cp1252")); pg.wait_for_selector("#ic-data")
+    ok(pg.input_value("#ic-valor") == "3" and pg.input_value("#ic-dec") == "," and pg.input_value("#ic-desc2") == "2", "CSV do Inter: pula o cabeçalho do banco, ignora o saldo, junta histórico e descrição")
+    pg.click('[data-act="imp-colunas-ok"]'); pg.wait_for_selector(".imp-row")
+    ok(pg.evaluate("MS.rows.map(r => r.desc + '=' + r.v).join('|')") == "Pix enviado - Maria Souza=125000|Compra no débito - MERCADO BOM PRECO=8735", "milhar com ponto e centavos com vírgula")
+    pg.keyboard.press("Escape")
+    dc = "Data;Descrição;Débito;Crédito;Saldo\n" + f"{(HOJE - datetime.timedelta(days=3)).strftime('%d/%m/%Y')};TARIFA;12,90;;100,00\n{(HOJE - datetime.timedelta(days=2)).strftime('%d/%m/%Y')};DEPOSITO;;500,00;600,00\n"
+    pg.evaluate("abrirImportar('a2')"); pg.set_input_files("#imp-arq", arq("dc.csv", dc)); pg.wait_for_selector("#ic-data")
+    ok(pg.input_value("#ic-valor") == "" and pg.input_value("#ic-deb") == "2" and pg.input_value("#ic-cred") == "3", "débito e crédito em colunas separadas")
+    pg.click('[data-act="imp-colunas-ok"]'); pg.wait_for_selector(".imp-row")
+    ok(pg.evaluate("MS.rows.map(r => r.v).join()") == "1290,-50000", "débito vira saída e crédito vira entrada"); pg.keyboard.press("Escape")
+
+    print("\n6. importação: fatura de cartão (CSV do Nubank)")
+    cartao = "date,title,amount\n" + "\n".join(f"{(HOJE - datetime.timedelta(days=i + 1)).isoformat()},{t},{v}" for i, (t, v) in enumerate([("Uber *Trip", "23.45"), ("Pagamento recebido", "-900.00"), ("Amazon - Parcela 2/3", "120.00"), ("Estorno Loja", "-50.00")]))
+    pg.evaluate("S.cartaoSel = 'k1'; irPara('cartoes')"); pg.click('[data-act="importar"][data-id="k1"]'); pg.set_input_files("#imp-arq", arq("nubank-fatura.csv", cartao)); pg.wait_for_selector("#ic-data")
+    pg.click('[data-act="imp-colunas-ok"]'); pg.wait_for_selector(".imp-row")
+    rows = pg.evaluate("MS.rows.map(r => r.tipo + ':' + r.v).join()")
+    ok(rows == "compra:2345,ignorar:-90000,compra:12000,estorno:-5000", f"compras, pagamento ignorado e estorno ({rows})")
+    fat = pg.evaluate("MS.fat"); ok(fat == pg.evaluate(f"faturaDe(C().cartoes.k1, '{(HOJE - datetime.timedelta(days=1)).isoformat()}')"), f"todas na fatura da compra mais recente ({fat})")
+    pg.click('[data-act="imp-fat"][data-d="1"]'); fat2 = pg.evaluate("MS.fat"); ok(fat2 == madd(fat, 1), "dá para trocar a fatura")
+    for bse in ("despesa",):
+        if pg.query_selector(f"#imp-lote-{bse}"): pg.select_option(f"#imp-lote-{bse}", index=1); pg.click(f'[data-act="imp-lote"][data-b="{bse}"]')
+    pg.click('[data-act="imp-ok"]'); pg.wait_for_function("S.view === 'lanc' && !janelaAberta()")
+    ok(pg.evaluate(f"D.L.filter(l => l.imp?.arq === 'nubank-fatura.csv').map(l => l.comp + ':' + l.valor).sort().join()") == ",".join(sorted([f"{fat2}:-5000", f"{fat2}:12000", f"{fat2}:2345"])), "fatura importada: 2 compras e 1 estorno na fatura escolhida")
+
+    print("\n7. arrastar o arquivo para a janela")
+    ir(pg, "geral")
+    pg.evaluate("""(txt => { const dt = new DataTransfer(); dt.items.add(new File([txt], 'solto.ofx')); document.querySelector('#content').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); })""" + f"({json.dumps(ofx)})")
+    pg.wait_for_selector(".imp-row"); ok(pg.evaluate("MS.arquivo") == "solto.ofx", "soltar um .ofx no app abre a importação já com o arquivo")
+    pg.keyboard.press("Escape")
+    pg.set_viewport_size({"width": 390, "height": 844})
+    pg.evaluate("abrirImportar('a1')"); pg.set_input_files("#imp-arq", f_ofx); pg.wait_for_selector(".imp-row")
+    ok(pg.evaluate("document.querySelector('.imp-lista').scrollWidth <= document.querySelector('.imp-lista').clientWidth + 1 && document.documentElement.scrollWidth <= innerWidth"), "revisão da importação no celular sem rolagem lateral")
+    pg.screenshot(path=str(TMP / "imp-celular.png"))
+    ctx.close()
+
+    print("\n8. modo claude.ai: importa, e comprovantes ficam escondidos")
+    ctx = b.new_context(); ctx.add_init_script(path=str(AQUI / "mock_claude.js")); pg = nova(ctx, "claude")
+    pg.wait_for_selector('[data-act="onb-restaurar"]'); restaurar(pg, f_base)
+    pg.evaluate("abrirLanc({ tipo: 'despesa' })"); esperar_foco(pg); ok(pg.query_selector("#m-anx-in") is None, "sem comprovantes no claude.ai"); pg.keyboard.press("Escape")
+    pg.evaluate("abrirImportar('a1')"); pg.set_input_files("#imp-arq", f_ofx); pg.wait_for_selector(".imp-row")
+    pg.select_option("#imp-lote-despesa", index=1); pg.click('[data-act="imp-lote"][data-b="despesa"]')
+    pg.click('[data-act="imp-ok"]'); pg.wait_for_function("S.view === 'lanc' && D.L.filter(l => l.imp).length === 5", timeout=20000)
+    ok(True, "importação no claude.ai (gravação um a um)")
+    # dados no formato v1 no claude.ai: a migração só regrava a configuração
+    v1 = gerar(anos=(2025, 2025), por_mes=30, seed=11); uid = "u1"
+    docs = [[f"data/users/{uid}/livro", {**v1["config"], "versao": 1}]] + [[f"data/users/{uid}/livro/l{l['comp'][:4]}/{l['id']}", l] for l in v1["lancamentos"]]
+    pg.evaluate("d => { localStorage.setItem('mockdb', JSON.stringify(d)); }", docs); pg.reload(); pronto(pg)
+    ok(pg.evaluate("C().versao") == 2 and pg.evaluate("JSON.stringify(C().orc.c1)") == '{"0000-01":120000}' and pg.evaluate("D.L.length") == 360, "migração v1 → v2 no claude.ai")
+    ok(pg.evaluate("__mock.writes") == 1, f"a migração gravou só a configuração ({pg.evaluate('__mock.writes')} gravação)")
+    ctx.close()
+    b.close()
+print("\nErros de página/console:", erros or "nenhum"); print(f"\n{oks} ok, {len(falhas)} falhas")
+for f in falhas: print("  -", f)
+sys.exit(1 if falhas or erros else 0)

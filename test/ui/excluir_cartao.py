@@ -1,0 +1,40 @@
+import pathlib
+from playwright.sync_api import sync_playwright
+AQUI = pathlib.Path(__file__).resolve().parent; RAIZ = AQUI.parents[1]
+src = open(AQUI/"run.py").read()
+exec(src[:src.index("with sync_playwright() as p:")])
+fails=[]
+def check(l,g,e):
+    ok=g==e; print(("OK  " if ok else "FALHA ")+f"{l}: {g!r}"+("" if ok else f" (esperado {e!r})"))
+    if not ok: fails.append(l)
+with sync_playwright() as p:
+    b=p.chromium.launch(); pg,errs=nova_pagina(b,viewport={"width":1280,"height":860},color_scheme="dark")
+    pg.goto("file://"+str(AQUI/"index.html")); pg.wait_for_selector('[data-act="onb-conta"]'); pg.click('[data-act="onb-conta"]'); pg.wait_for_selector("#o-nome")
+    pg.fill("#o-nome","Nubank"); money(pg,"#o-saldo","100000"); pg.click('[data-act="onb-criar"]'); pg.wait_for_selector("text=Saldo em contas")
+    for nome in ("Roxinho","Inter"):
+        pg.click('.side [data-view="cartoes"]'); pg.click('text=Adicionar cartão' if nome=="Roxinho" else 'text=Novo cartão'); pg.wait_for_timeout(120)
+        pg.fill("#k-nome",nome); pg.fill("#k-fech","3"); pg.fill("#k-venc","10"); pg.click('[data-act="cartao-salvar"]'); pg.wait_for_selector(".mback",state="detached")
+    ids=pg.evaluate("Object.fromEntries(Object.entries(S.cfg.cartoes).map(([id,c])=>[c.nome,id]))")
+    pg.click("#title"); pg.keyboard.press("c"); pg.wait_for_selector("#m-valor:focus"); pg.keyboard.type("20000"); pg.select_option("#m-cartao",label="Roxinho"); pg.select_option("#m-cat",label="Delivery")
+    pg.keyboard.press("Enter"); pg.wait_for_selector(".mback",state="detached"); pg.wait_for_timeout(200)
+    pg.evaluate("derivar()"); F=pg.evaluate(f"faturaDe(S.cfg.cartoes['{ids['Roxinho']}'], today())")
+    pg.evaluate(f"A['pagar-fatura']({{dataset:{{id:'{ids['Roxinho']}', f:'{F}'}}}})"); pg.wait_for_timeout(150); pg.click("#m-salvar"); pg.wait_for_selector(".mback",state="detached"); pg.wait_for_timeout(200)
+    nub=pg.evaluate("Object.keys(S.cfg.contas)[0]")
+    pg.evaluate("derivar()"); check("Nubank após pagar fatura", pg.evaluate(f"saldoAtual('{nub}')"), 80000)
+    pg.click('.side [data-view="cartoes"]'); pg.click(f'[data-act="sel-cartao"][data-id="{ids["Roxinho"]}"]'); pg.wait_for_timeout(100)
+    pg.click(f'[data-act="cartao-editar"][data-id="{ids["Roxinho"]}"]'); pg.wait_for_timeout(120); pg.click('[data-act="cartao-excluir"]')
+    print("aviso:", pg.inner_text("#m-confirm").splitlines()[0][:200])
+    pg.screenshot(path=str(SHOTS/"51-excluir-cartao.png"))
+    pg.click('[data-act="cartao-excluir-ok"]'); pg.wait_for_selector(".mback",state="detached"); pg.wait_for_timeout(250)
+    pg.evaluate("derivar()")
+    check("cartões restantes", pg.evaluate("Object.values(S.cfg.cartoes).map(c=>c.nome)"), ["Inter"])
+    check("compra e pagamento apagados", pg.evaluate("D.L.length"), 0)
+    check("Nubank volta ao saldo inicial", pg.evaluate(f"saldoAtual('{nub}')"), 100000)
+    check("tela de cartões mostra o restante", pg.locator(".cardtab").all_inner_texts(), ["Inter"])
+    pg.click(f'[data-act="cartao-editar"][data-id="{ids["Inter"]}"]'); pg.wait_for_timeout(120); pg.click('[data-act="cartao-excluir"]')
+    check("aviso simples", pg.inner_text("#m-confirm").startswith("Excluir o cartão Inter?"), True)
+    pg.click('[data-act="cartao-excluir-ok"]'); pg.wait_for_selector(".mback",state="detached"); pg.wait_for_timeout(250)
+    check("sem cartões", pg.evaluate("Object.keys(S.cfg.cartoes).length"), 0)
+    check("estado vazio de cartões", pg.locator("text=Nenhum cartão cadastrado").count(), 1)
+    print("erros:", errs); b.close()
+print("RESULTADO:", "TUDO CERTO" if not fails and not errs else fails)
