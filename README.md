@@ -30,23 +30,8 @@ Um app web em um arquivo só, sem instalação e sem servidor.</p>
 
 ## Como usar
 
-O app inteiro é o [`index.html`](index.html). Ele escolhe sozinho onde guardar os dados:
-
-| Onde abre | Onde ficam os dados |
-| --- | --- |
-| Como artifact no claude.ai | Na conta claude.ai do usuário, sincronizados entre aparelhos |
-| Como página comum (servidor local ou GitHub Pages) | No navegador (IndexedDB), só naquele aparelho e navegador |
-
-Para usar no computador, sirva a pasta por HTTP e abra o endereço no navegador:
-
-```bash
-python3 -m http.server 8000
-# depois abra http://localhost:8000
-```
-
-Não abra o arquivo com duplo clique (`file://`): o navegador limita o armazenamento nesse modo. Os detalhes, inclusive como levar os dados do claude.ai para a versão local, estão em [docs/rodar-localmente.md](docs/rodar-localmente.md).
-
-Para usar de qualquer lugar sem servidor próprio, ative o GitHub Pages neste repositório (Settings › Pages › Deploy from a branch › `main`, pasta `/`). Cada navegador continua com os próprios dados, então baixe um backup de vez em quando em Configurações › Seus dados.
+O app inteiro é o [`index.html`](index.html).
+Também pode ser acessado a partir de https://hudsonjunior42.github.io/FinTrix/
 
 ## Estrutura
 
@@ -71,10 +56,9 @@ test/
 ## Desenvolvimento
 
 - **Sem build e sem dependências.** É JavaScript puro num arquivo só. As fontes vêm do Google Fonts.
-- **Camada de dados.** Todo acesso a dados passa pelo bloco "camada de dados" no início do script (`Backends.claude` e `Backends.local`). Funcionalidades novas não devem chamar `window.claude` fora dele. Para hospedar com sincronização própria (PocketBase, Supabase…), basta acrescentar outro backend que cumpra o mesmo contrato.
+- **Camada de dados.** Todo acesso a dados passa pelo bloco "camada de dados" no início do script (`Backends.local`). Para hospedar com sincronização própria (PocketBase, Supabase…), basta acrescentar outro backend que cumpra o mesmo contrato.
 - **Valores em centavos** (inteiros), datas `AAAA-MM-DD` e meses `AAAA-MM`.
 - **Testes** com Playwright (Python). Como instalar e rodar: [test/README.md](test/README.md).
-- **Publicar no claude.ai:** o artifact recebe o conteúdo do `index.html` a partir de `<title>`. O claude.ai acrescenta o cabeçalho da página sozinho.
 
 ### Versão instalável (PWA)
 
