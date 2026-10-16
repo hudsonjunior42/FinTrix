@@ -18,7 +18,7 @@ with sync_playwright() as p:
     pg.click("#title"); pg.keyboard.press("c"); pg.wait_for_selector("#m-valor:focus"); pg.keyboard.type("20000"); pg.select_option("#m-cartao",label="Roxinho"); pg.select_option("#m-cat",label="Delivery")
     pg.keyboard.press("Enter"); pg.wait_for_selector(".mback",state="detached"); pg.wait_for_timeout(200)
     pg.evaluate("derivar()"); F=pg.evaluate(f"faturaDe(S.cfg.cartoes['{ids['Roxinho']}'], today())")
-    pg.evaluate(f"A['pagar-fatura']({{dataset:{{id:'{ids['Roxinho']}', f:'{F}'}}}})"); pg.wait_for_timeout(150); pg.click("#m-salvar"); pg.wait_for_selector(".mback",state="detached"); pg.wait_for_timeout(200)
+    pg.evaluate(f"A['pagar-fatura-form']({{dataset:{{id:'{ids['Roxinho']}', f:'{F}'}}}})"); pg.wait_for_timeout(150); pg.click("#m-salvar"); pg.wait_for_selector(".mback",state="detached"); pg.wait_for_timeout(200)
     nub=pg.evaluate("Object.keys(S.cfg.contas)[0]")
     pg.evaluate("derivar()"); check("Nubank após pagar fatura", pg.evaluate(f"saldoAtual('{nub}')"), 80000)
     pg.click('.side [data-view="cartoes"]'); pg.click(f'[data-act="sel-cartao"][data-id="{ids["Roxinho"]}"]'); pg.wait_for_timeout(100)

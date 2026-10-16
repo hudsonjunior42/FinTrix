@@ -2034,7 +2034,7 @@ function vCartoes() {
       </div>
       ${lim ? `<div><div class="bar ${u > lim ? "over" : ""}"><i style="width:${Math.min(100, u / lim * 100)}%"></i></div><div class="hint" style="margin-top:6px">Limite usado <span class="num">${fmt(u)}</span> · disponível <span class="num">${fmt(lim - u)}</span> de <span class="num">${fmt(lim)}</span></div></div>` : ""}
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" data-act="novo" data-tipo="cartao" data-cartao="${cid}">Nova compra</button><button class="btn" data-act="importar" data-id="${cid}">Importar fatura</button>
-        ${f.restante > 0 ? `<button class="btn pri" data-act="pagar-fatura" data-id="${cid}" data-f="${M}">Pagar ${fmt(f.restante)}</button>` : ""}
+        ${f.restante > 0 ? `<button class="btn pri" data-act="pagar-fatura" data-id="${cid}" data-f="${M}" title="${contaDoCartao(cid) ? `Desconta de ${esc(nomeConta(contaDoCartao(cid)))} hoje` : "Escolher a conta e registrar o pagamento"}">Pagar ${fmt(f.restante)}</button><button class="btn ghost" data-act="pagar-fatura-form" data-id="${cid}" data-f="${M}" title="Pagar parte da fatura, com outra conta ou em outra data">Outro valor ou conta</button>` : ""}
         <button class="btn ghost" data-act="fatura-ajustar" data-id="${cid}" data-f="${M}" title="Deixar o total igual ao da fatura do banco">Ajustar fatura</button></div>
     </section>
     <section class="panel" style="padding:4px 12px 8px">
@@ -3716,6 +3716,36 @@ async function desfazerMudanca({ restaurar, apagar, recorr }) {
     toast("Desfeito");
   } catch (ex) { falha(ex); }
 }
+// conta de pagamento do cartão (se ainda existir e não estiver arquivada)
+function contaDoCartao(cid) { const id = C().cartoes?.[cid]?.conta; return id && C().contas?.[id] && !C().contas[id].arq ? id : null; }
+// Pagar: desconta da conta do cartão na hora (hoje, pago), com Desfazer. Sem conta definida, abre a janela para escolher.
+async function pagarFatura(cid, F, btn) {
+  derivarSeNecessario();
+  const c = C().cartoes?.[cid]; if (!c) return;
+  const f = fatura(cid, F), conta = contaDoCartao(cid);
+  if (!conta) {
+    A["pagar-fatura-form"]({ dataset: { id: cid, f: F } });
+    toast(`Escolha a conta: ${c.nome} não tem conta de pagamento definida`);
+    return;
+  }
+  if (f.restante <= 0) { toast("Esta fatura já está paga"); return; }
+  if (btn) btn.disabled = true;
+  const h = today(), antes = [], novos = [];
+  try {
+    // pagamento já agendado (pendente) para esta fatura: confirma ele em vez de lançar outro
+    let falta = f.restante;
+    for (const p of f.pags.filter(p => !p.pago)) {
+      if (falta <= 0) break;
+      antes.push(limpo(p)); await lancSave({ ...limpo(p), pago: true }, p); falta -= p.valor;
+    }
+    if (falta > 0) {
+      const l = { id: rid(), tipo: "transf", desc: `Pagamento fatura ${c.nome}`, data: h, comp: mk(h), conta, destino: cid, fatPag: F, cat: null, cartao: null, valor: falta, pago: true, tags: [], obs: "", criado: Date.now() };
+      await lancSave(l); novos.push(l);
+    }
+    toast(`Fatura de ${mesCurto(F)} paga: ${fmt(f.restante)} saiu de ${nomeConta(conta)}`, { rotulo: "Desfazer", fn: async () => {
+      try { for (const l of novos) await lancDel(l); for (const l of antes) await lancSave(l); toast("Pagamento desfeito"); } catch (ex) { falha(ex); } } });
+  } catch (ex) { falha(ex); if (btn) btn.disabled = false; }
+}
 async function desfazerExclusao(removidos, fixaAntes) {
   try {
     for (const l of removidos) await lancSave(l);
@@ -4291,8 +4321,9 @@ const A = {
   "ver-cartao": el => { S.cartaoSel = el.dataset.id; irPara("cartoes"); },
   "sel-cartao": el => { S.cartaoSel = el.dataset.id; render(); },
   "toggle-arq": () => { S.mostrarArq = !S.mostrarArq; render(); },
-  "pagar-fatura": el => { derivarSeNecessario(); const cid = el.dataset.id, F = el.dataset.f, c = C().cartoes[cid], f = fatura(cid, F);
-    abrirLanc({ tipo: "transf", preset: { conta: c.conta || contas()[0]?.[0], para: cid, valor: f.restante, fatPag: F, desc: `Pagamento fatura ${c.nome}` } }); },
+  "pagar-fatura": el => pagarFatura(el.dataset.id, el.dataset.f, el),
+  "pagar-fatura-form": el => { derivarSeNecessario(); const cid = el.dataset.id, F = el.dataset.f, c = C().cartoes[cid], f = fatura(cid, F);
+    abrirLanc({ tipo: "transf", preset: { conta: contaDoCartao(cid) || contas()[0]?.[0], para: cid, valor: f.restante, fatPag: F, desc: `Pagamento fatura ${c.nome}` } }); },
   "filtrar-conta": el => { S.f = { ...S.f, conta: el.dataset.id }; irPara("lanc"); },
   "transf-de": el => abrirLanc({ tipo: "transf", preset: { conta: el.dataset.id } }),
   ajustar: el => abrirAjuste(el.dataset.id),
