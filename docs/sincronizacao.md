@@ -8,6 +8,7 @@
    - **Pasta sincronizada**: uma pasta que o Syncthing, o Nextcloud ou o Dropbox já leva para os outros aparelhos.
    - **Bucket S3**: Cloudflare R2, Backblaze B2, AWS ou outro compatível. Passo a passo para criar o bucket e uma chave restrita a ele: [bucket-s3.md](bucket-s3.md).
 2. Aparece o **código de pareamento**. No outro aparelho: na apresentação, **Parear com outro aparelho**; ou, se ele já tem dados, **Configurações › Seus dados › Sincronização › Entrar num cofre** (os dados dele são trocados pelos do cofre, depois de uma cópia automática). No cofre em pasta, informe onde a pasta está nesse aparelho.
+   No bucket, o primeiro envio (estado e todos os comprovantes) pode levar alguns minutos. O app espera até 15 s para pegar erros rápidos (endpoint, chave, bucket) e mostra o código; o envio continua em segundo plano, com o andamento em Configurações ("enviando os dados pela primeira vez…"). Se esse primeiro envio falhar, a sincronização volta a ficar desligada, com o motivo na tela. Pareie os outros aparelhos depois que aparecer a hora da última sincronização.
 3. A partir daí cada aparelho sincroniza ao abrir, alguns segundos depois de cada mudança e a cada minuto. **Sincronizar agora** força um ciclo.
 
 O código de pareamento tem a chave do cofre e o acesso ao destino: quem tiver o código lê os dados. Copie de um aparelho para o outro; não mande por e-mail ou mensagem. Enquanto o cofre existir, ele também serve para recuperar os dados num aparelho novo.

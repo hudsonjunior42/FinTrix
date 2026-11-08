@@ -1477,7 +1477,8 @@ function iniciarSync() {
   S.sync = S.sync || { ligado: false };
   window.__TAURI__.event.listen("sync-estado", ev => {
     const mudou = JSON.stringify(ev.payload) !== JSON.stringify(S.sync); S.sync = ev.payload;
-    if (mudou && S.view === "config" && !janelaAberta()) render();
+    // com uma janela aberta, a tela de Configurações é redesenhada quando ela fechar (fecharJanela)
+    if (mudou && S.view === "config") { if (janelaAberta()) S.syncSujo = true; else render(); }
   });
   invT("sync_estado").then(e => { S.sync = e; }).catch(() => {});
   invT("sync_agora", { versao: VERSAO_DADOS }).catch(e => console.warn("sincronização:", e));
@@ -1485,11 +1486,23 @@ function iniciarSync() {
 function blocoSync(li) {
   if (!nativoTauri()) return "";
   const y = S.sync || {};
-  if (!y.ligado) return li("Sincronização", "Desligada: os dados ficam só neste computador. Ligue para usar o FinTrix em outros aparelhos. Tudo é cifrado aqui antes de sair, para uma pasta sincronizada (Syncthing, Nextcloud) ou um bucket S3 (Cloudflare R2, Backblaze B2).",
+  if (!y.ligado) return li("Sincronização", `Desligada: os dados ficam só neste computador. Ligue para usar o FinTrix em outros aparelhos. Tudo é cifrado aqui antes de sair, para uma pasta sincronizada (Syncthing, Nextcloud) ou um bucket S3 (Cloudflare R2, Backblaze B2).${y.erro ? `<br>${erroSyncHtml(y.erro)}` : ""}`,
     '<button class="btn sm pri" data-act="sync-criar">Ligar</button><button class="btn sm" data-act="sync-entrar">Entrar num cofre</button>');
   const outros = y.outros ? plural(y.outros, "outro aparelho", "outros aparelhos") : "nenhum outro aparelho ainda";
-  return li("Sincronização", `Ligada · ${esc(y.destino || "")} · ${outros}${y.ultimo ? ` · última: ${esc(dataHora(y.ultimo))}` : ""}${y.erro ? `<br><span class="warn">${esc(y.erro)}</span>` : ""}`,
+  const quando = y.sincronizando ? (y.ultimo ? " · sincronizando…" : " · enviando os dados pela primeira vez…") : y.ultimo ? ` · última: ${esc(dataHora(y.ultimo))}` : "";
+  return li("Sincronização", `Ligada · ${esc(y.destino || "")} · ${outros}${quando}${y.erro ? `<br>${erroSyncHtml(y.erro)}` : ""}`,
     '<button class="btn sm" data-act="sync-agora">Sincronizar agora</button><button class="btn sm" data-act="sync-codigo">Parear aparelho</button><button class="btn sm ghost" data-act="sync-desligar">Desligar</button>');
+}
+// "Dica em português (detalhes técnicos)" vira a dica + "Detalhes" recolhido
+function erroSyncHtml(msg) {
+  const m = String(msg).match(/^([\s\S]*?) \(([\s\S]+)\)$/);
+  return m ? `<span class="warn">${esc(m[1])}</span><details class="seg-det"><summary>Detalhes</summary><pre style="white-space:pre-wrap;word-break:break-all">${esc(m[2])}</pre></details>`
+    : `<span class="warn">${esc(msg)}</span>`;
+}
+function mostrarErroSync(msg) {
+  const err = $("#m-err"); if (!err) { toast(String(msg)); return; }
+  err.innerHTML = erroSyncHtml(msg);
+  err.scrollIntoView({ block: "nearest" });
 }
 const campoPasta = () => `<div class="f"><label for="sy-p">Pasta</label><div style="display:flex;gap:8px"><input class="inp" id="sy-p" style="flex:1" autocomplete="off" spellcheck="false"><button type="button" class="btn" data-act="sync-escolher">Escolher…</button></div></div>`;
 function abrirSyncCriar() {
@@ -1505,30 +1518,54 @@ function abrirSyncCriar() {
         <div class="row2"><div class="f"><label for="sy-bucket">Bucket</label><input class="inp" id="sy-bucket" autocomplete="off" spellcheck="false"></div>
           <div class="f"><label for="sy-reg">Região</label><input class="inp" id="sy-reg" placeholder="auto" autocomplete="off" spellcheck="false"></div></div>
         <div class="f"><label for="sy-acc">Access key</label><input class="inp" id="sy-acc" autocomplete="off" spellcheck="false"></div>
-        <div class="f"><label for="sy-sec">Secret key</label><input class="inp" id="sy-sec" type="password" autocomplete="off"></div></div>
+        <div class="f"><label for="sy-sec">Secret key</label><input class="inp" id="sy-sec" type="password" autocomplete="off"></div>
+        <div class="hint">Passo a passo para criar o bucket e a chave: docs/bucket-s3.md no repositório do FinTrix.</div></div>
+      <div class="hint" id="sy-prog" role="status"></div>
       <div class="err" id="m-err"></div></form>
     <div class="mfoot"><span class="sp"></span><button class="btn" data-act="fechar">Cancelar</button><button class="btn pri" data-act="sync-criar-ok">Ligar</button></div>`, "sm");
   $$('[name="sy-tipo"]').forEach(r => r.addEventListener("change", () => { const s3 = $('[name="sy-tipo"]:checked').value === "s3"; $("#sy-s3").hidden = !s3; $("#sy-pasta").hidden = s3; }));
   $("#f-sync").addEventListener("submit", ev => { ev.preventDefault(); syncCriar(); });
 }
+// { destino } ou { erro }
 function destinoDoForm() {
   const v = id => ($("#" + id)?.value || "").trim();
-  if ($('[name="sy-tipo"]:checked').value === "pasta") return v("sy-p") ? { tipo: "pasta", pasta: v("sy-p") } : null;
-  const d = { tipo: "s3", endpoint: v("sy-end"), bucket: v("sy-bucket"), regiao: v("sy-reg"), access: v("sy-acc"), secret: $("#sy-sec").value };
-  return d.bucket && d.access && d.secret ? d : null;
+  if ($('[name="sy-tipo"]:checked').value === "pasta") return v("sy-p") ? { destino: { tipo: "pasta", pasta: v("sy-p") } } : { erro: "Escolha a pasta." };
+  const d = { tipo: "s3", endpoint: v("sy-end"), bucket: v("sy-bucket"), regiao: v("sy-reg"), access: v("sy-acc"), secret: $("#sy-sec").value.trim() };
+  if (d.endpoint) {
+    let u;
+    try { u = new URL(/^[a-z]+:\/\//i.test(d.endpoint) ? d.endpoint : "https://" + d.endpoint); } catch { return { erro: "Endpoint inválido: use o endereço que o painel do provedor mostra." }; }
+    // endereço copiado com o bucket no fim (https://<conta>.r2.cloudflarestorage.com/meu-bucket)
+    const noCaminho = decodeURIComponent(u.pathname).replace(/^\/+|\/+$/g, "");
+    if (noCaminho && !d.bucket) d.bucket = noCaminho.split("/")[0];
+    d.endpoint = u.origin;
+    const r2 = u.hostname.match(/^([^.]+)\.(?:(?:eu|fedramp|us)\.)?r2\.cloudflarestorage\.com$/i);
+    if (/r2\.cloudflarestorage\.com$/i.test(u.hostname) && !(r2 && /^[0-9a-f]{32}$/i.test(r2[1])))
+      return { erro: "No R2, o endpoint começa com o Account ID (32 letras e números): https://<ACCOUNT_ID>.r2.cloudflarestorage.com. Confira no painel do R2." };
+  }
+  if (!d.bucket || !d.access || !d.secret) return { erro: "Preencha o bucket, a access key e a secret key." };
+  return { destino: d };
 }
 async function syncCriar() {
-  const destino = destinoDoForm(), err = $("#m-err"), btn = $('[data-act="sync-criar-ok"]');
-  if (!destino) { err.textContent = "Preencha a pasta, ou o bucket, a access key e a secret key."; return; }
+  const { destino, erro } = destinoDoForm(), err = $("#m-err"), btn = $('[data-act="sync-criar-ok"]'), prog = $("#sy-prog");
+  if (erro) { mostrarErroSync(erro); return; }
   btn.disabled = true; err.textContent = ""; btn.textContent = "Ligando…";
-  try { const codigo = await invT("sync_criar", { destino, versao: VERSAO_DADOS }); S.sync = await invT("sync_estado"); syncMostrarCodigo(codigo); }
-  catch (e) { err.textContent = String(e); btn.disabled = false; btn.textContent = "Ligar"; }
+  prog.textContent = destino.tipo === "s3" ? "Conectando ao bucket e enviando os dados cifrados…" : "Gravando os dados cifrados na pasta…";
+  try {
+    const r = await invT("sync_criar", { destino, versao: VERSAO_DADOS });
+    S.sync = await invT("sync_estado");
+    if ($("#f-sync")) syncMostrarCodigo(r.codigo, r.enviando);
+    else { S.syncSujo = false; agendar(); toast("Sincronização ligada", { rotulo: "Ver código", fn: () => syncMostrarCodigo(r.codigo, r.enviando) }); }
+  } catch (e) {
+    if ($("#f-sync")) { mostrarErroSync(e); prog.textContent = ""; btn.disabled = false; btn.textContent = "Ligar"; }
+    else toast("A sincronização não foi ligada: veja o motivo em Configurações › Seus dados");
+  }
 }
-async function syncMostrarCodigo(codigo) {
+async function syncMostrarCodigo(codigo, enviando) {
   if (!codigo) { try { codigo = await invT("sync_codigo"); } catch (e) { toast(String(e)); return; } }
   abrirJanela(`<div class="mhead"><h3>Código de pareamento</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>
     <div class="mbody"><div class="hint">No outro aparelho: num aparelho novo, "Parear com outro aparelho" na apresentação; num que já tem dados, Configurações › Seus dados › Sincronização › Entrar num cofre. Depois, cole este código.</div>
       <div class="hint warn" style="margin-top:8px">O código tem a chave do cofre e o acesso ao destino: quem tiver o código lê seus dados. Não mande por e-mail ou mensagem; copie de um aparelho para o outro e não guarde junto com backups.</div>
+      ${enviando ? `<div class="hint" style="margin-top:8px">Os dados ainda estão sendo enviados pela primeira vez (com comprovantes, pode levar alguns minutos). Pode fechar esta janela: o envio continua. Pareie os outros aparelhos depois que Configurações › Seus dados mostrar a hora da última sincronização.</div>` : ""}
       <textarea class="inp num" id="sy-cod" readonly rows="5" style="margin-top:12px;width:100%;word-break:break-all">${esc(codigo)}</textarea></div>
     <div class="mfoot"><span class="sp"></span><button class="btn" data-act="sync-copiar">Copiar</button><button class="btn pri" data-act="fechar">Fechar</button></div>`, "sm");
 }
@@ -1564,7 +1601,7 @@ async function syncEntrar() {
     if (S.cfg) await guardarCopia("Antes de entrar num cofre de sincronização");
     await invT("sync_entrar", { codigo, pasta: ($("#sy-p")?.value || "").trim() || null, versao: VERSAO_DADOS });
     location.reload();
-  } catch (e) { err.textContent = String(e); btn.disabled = false; btn.textContent = rotulo; }
+  } catch (e) { mostrarErroSync(e); btn.disabled = false; btn.textContent = rotulo; }
 }
 async function syncEscolherPasta() {
   try { const p = await invT("escolher_pasta"); if (p) $("#sy-p").value = p; } catch (e) { toast(String(e)); }
@@ -3372,7 +3409,7 @@ function escolherData(ds) {
   h.value = ds; h.dispatchEvent(new Event("change", { bubbles: true }));
   $("#" + id + "-txt")?.focus();
 }
-function fecharJanela() { if ($("#menu.dpick")) fecharMenu(); $("#layer").innerHTML = ""; MS = null; }
+function fecharJanela() { if ($("#menu.dpick")) fecharMenu(); $("#layer").innerHTML = ""; MS = null; if (S.syncSujo) { S.syncSujo = false; agendar(); } }
 const janelaAberta = () => !!$("#mback");
 
 /* calculadora no campo de valor: "25,90+12,50", "3x12,90", "(10+5)/2" */

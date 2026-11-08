@@ -308,6 +308,7 @@ async fn salvar_arquivo(app: AppHandle, request: Request<'_>) -> Result<Option<S
 async fn ciclo(app: &AppHandle) -> Result<Value, String> {
     let sinc = app.state::<Sincronia>();
     let _vez = sinc.rodando.lock().await;
+    let _ = app.emit("sync-estado", estado_sync(app)); // a tela mostra "sincronizando…"
     let store = app.state::<Banco>().store()?;
     let Some(cofre) = sync::cofre_salvo(&store).map_err(texto)? else { return Ok(json!({ "ligado": false })) };
     let Some(versao) = *sinc.versao.lock().unwrap() else { return Err("a interface ainda não abriu".into()) };
@@ -342,6 +343,7 @@ fn estado_sync(app: &AppHandle) -> Value {
         "ultimo": ultimo,
         "erro": *sinc.erro.lock().unwrap(),
         "outros": *sinc.outros.lock().unwrap(),
+        "sincronizando": sinc.rodando.try_lock().is_err(),
     })
 }
 
@@ -368,19 +370,39 @@ async fn sync_agora(app: AppHandle, versao: u32) -> Result<Value, String> {
     ciclo(&app).await
 }
 
-/// Cria um cofre com os dados deste aparelho e faz o primeiro envio. Devolve o código de pareamento.
+/// Cria um cofre com os dados deste aparelho e começa o primeiro envio. Devolve { codigo, enviando }.
+/// O primeiro envio (estado e todos os comprovantes) pode levar minutos num bucket: espera até 15 s para
+/// pegar os erros rápidos (chave, endpoint, bucket); depois disso devolve o código e o envio continua em
+/// segundo plano, com o andamento no status. Se esse primeiro envio falhar, a sincronização é desligada.
 #[tauri::command]
-async fn sync_criar(app: AppHandle, destino: Destino, versao: u32) -> Result<String, String> {
+async fn sync_criar(app: AppHandle, destino: Destino, versao: u32) -> Result<Value, String> {
     let store = app.state::<Banco>().store()?;
     let cofre = Cofre::novo(destino).map_err(texto)?;
     sync::conectar(&cofre.destino).map_err(texto)?;
     sync::salvar_cofre(&store, Some(&cofre)).map_err(texto)?;
     *app.state::<Sincronia>().versao.lock().unwrap() = Some(versao);
-    if let Err(e) = ciclo(&app).await {
-        sync::salvar_cofre(&store, None).map_err(texto)?;
-        return Err(e);
+    let codigo = cofre.codigo().map_err(texto)?;
+    let app2 = app.clone();
+    let mut primeiro = tauri::async_runtime::spawn(async move {
+        let r = ciclo(&app2).await;
+        if let Err(e) = &r {
+            // nunca chegou a sincronizar: desfaz, para a tela voltar a oferecer "Ligar" com o motivo
+            if let Ok(store) = app2.state::<Banco>().store() {
+                if store.meta("sync/ultimo").ok().flatten().is_none() {
+                    let _ = sync::salvar_cofre(&store, None);
+                    *app2.state::<Sincronia>().erro.lock().unwrap() = Some(format!("A sincronização não foi ligada: {e}"));
+                    let _ = app2.emit("sync-estado", estado_sync(&app2));
+                }
+            }
+        }
+        r
+    });
+    match tokio::time::timeout(std::time::Duration::from_secs(15), &mut primeiro).await {
+        Ok(Ok(Ok(_))) => Ok(json!({ "codigo": codigo, "enviando": false })),
+        Ok(Ok(Err(e))) => Err(e),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Ok(json!({ "codigo": codigo, "enviando": true })),
     }
-    cofre.codigo().map_err(texto)
 }
 
 /// Entra num cofre existente: confere o código e o destino ANTES de trocar os dados deste aparelho pelos do cofre.
@@ -430,6 +452,17 @@ fn teste_fim(app: AppHandle, ok: bool, relatorio: String) {
         println!("{relatorio}");
         app.exit(if ok { 0 } else { 1 });
     }
+}
+
+fn contexto() -> tauri::Context {
+    #[allow(unused_mut)]
+    let mut ctx = tauri::generate_context!();
+    // testes (só em debug, com pasta própria): sem instância única, para rodar com o FinTrix do usuário aberto
+    #[cfg(debug_assertions)]
+    if std::env::var_os("FINTRIX_DADOS").is_some() {
+        ctx.config_mut().app.enable_gtk_app_id = false;
+    }
+    ctx
 }
 
 fn main() {
@@ -504,6 +537,6 @@ fn main() {
             escolher_pasta,
             teste_fim
         ])
-        .run(tauri::generate_context!())
+        .run(contexto())
         .expect("erro ao iniciar o FinTrix");
 }

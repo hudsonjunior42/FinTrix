@@ -30,7 +30,7 @@ O Rust está em `~/.cargo/bin` (não está no PATH dos shells do Claude): use `e
 
 ```bash
 cargo test -p fintrix-core                 # núcleo: banco, mesclagem, cifra, dois aparelhos por pasta
-python3 test/desktop.py                    # app desktop pela interface (precisa de tela e do FinTrix fechado)
+python3 test/desktop.py                    # app desktop pela interface (precisa de tela; roda com o FinTrix do usuário aberto)
 cargo tauri build --bundles appimage,deb   # pacotes em target/release/bundle/ (copiar para dist/linux/)
 python3 tools/tauri_prep.py                # só a cópia do app web (o build já chama)
 ```
