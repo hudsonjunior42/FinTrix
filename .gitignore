@@ -24,3 +24,7 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+
+# Rust / Tauri
+target/
+src-tauri/gen/

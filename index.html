@@ -1213,7 +1213,8 @@ const Backends = {
     return { modo: "claude", db, uid, dl };
   },
   async local() {
-    return { modo: "local", db: await localDb("fintrix"), uid: "local", dl: downloadsNavegador() };
+    // no app desktop (Tauri) os documentos vão para o SQLite cifrado; o resto do app trata como "local"
+    return { modo: "local", db: await localDb("fintrix", nativoTauri() ? persistTauri() : undefined), uid: "local", dl: downloadsNavegador() };
   },
 };
 // atalho do ícone instalado (PWA): ?novo=despesa abre a janela de lançamento uma vez
@@ -1236,18 +1237,49 @@ function erroDb(e) {
   console.error(e);
   return Object.assign(new Error((e && e.message) || "Erro de armazenamento"), { code: e && e.name === "QuotaExceededError" ? "quota_exceeded" : e && e.code || "unavailable" });
 }
-async function localDb(nome) {
+// Persistência do backend local: { carregar() -> [[caminho, dados]], gravar(caminho, dados|null), lote([{ path, data|null }]) }.
+// O navegador usa IndexedDB; o app desktop (Tauri) usa o SQLite cifrado do lado Rust.
+async function persistIdb(nome) {
   if (!window.indexedDB) throw Object.assign(new Error("IndexedDB indisponível"), { code: "unavailable" });
   const abrir = indexedDB.open(nome, 1);
   abrir.onupgradeneeded = () => abrir.result.createObjectStore("docs");
   const idb = await idbReq(abrir);
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
+  return {
+    async carregar() {
+      const st = idb.transaction("docs").objectStore("docs");
+      const [chaves, valores] = await Promise.all([idbReq(st.getAllKeys()), idbReq(st.getAll())]);
+      return chaves.map((k, i) => [k, valores[i]]);
+    },
+    async gravar(p, data) {
+      const tx = idb.transaction("docs", "readwrite");
+      const st = tx.objectStore("docs");
+      if (data === null) st.delete(p); else st.put(data, p);
+      await new Promise((ok, no) => { tx.oncomplete = ok; tx.onerror = () => no(tx.error); tx.onabort = () => no(tx.error); });
+    },
+    async lote(ops) {
+      const tx = idb.transaction("docs", "readwrite"), st = tx.objectStore("docs");
+      const fim = new Promise((ok, no) => { tx.oncomplete = ok; tx.onerror = () => no(tx.error); tx.onabort = () => no(tx.error); });
+      fim.catch(() => {});
+      try { for (const o of ops) if (o.data === null) st.delete(o.path); else st.put(o.data, o.path); }
+      catch (e) { try { tx.abort(); } catch {} throw e; }
+      await fim;
+    },
+  };
+}
+function persistTauri() {
+  const inv = window.__TAURI__.core.invoke;
+  return {
+    carregar: () => inv("db_todos"),
+    gravar: (path, data) => inv("db_gravar", { path, data }),
+    lote: ops => inv("db_lote", { ops }),
+  };
+}
+const nativoTauri = () => !!(window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === "function");
+async function localDb(nome, persist) {
+  if (!persist) persist = await persistIdb(nome);
   const cache = new Map();
-  {
-    const st = idb.transaction("docs").objectStore("docs");
-    const [chaves, valores] = await Promise.all([idbReq(st.getAllKeys()), idbReq(st.getAll())]);
-    chaves.forEach((k, i) => cache.set(k, valores[i]));
-  }
+  for (const [k, v] of await persist.carregar()) cache.set(k, v);
   const clone = v => v === undefined ? undefined : structuredClone(v);
   const ehObj = v => v !== null && typeof v === "object" && !Array.isArray(v);
   const mesclar = (a, b) => { const o = ehObj(a) ? { ...a } : {}; for (const [k, v] of Object.entries(b)) o[k] = ehObj(v) && ehObj(o[k]) ? mesclar(o[k], v) : clone(v); return o; };
@@ -1279,12 +1311,7 @@ async function localDb(nome) {
   let fila = Promise.resolve();
   const enfileirar = fn => { const p = fila.then(fn); fila = p.catch(() => {}); return p; };
   async function gravar(p, data) {
-    try {
-      const tx = idb.transaction("docs", "readwrite");
-      const st = tx.objectStore("docs");
-      if (data === null) st.delete(p); else st.put(data, p);
-      await new Promise((ok, no) => { tx.oncomplete = ok; tx.onerror = () => no(tx.error); tx.onabort = () => no(tx.error); });
-    } catch (e) { throw erroDb(e); }
+    try { await persist.gravar(p, data); } catch (e) { throw erroDb(e); }
     if (data === null) cache.delete(p); else cache.set(p, data);
     avisar(p);
     try { canal && canal.postMessage({ path: p, data }); } catch {}
@@ -1298,14 +1325,7 @@ async function localDb(nome) {
   function lote(ops) {
     return enfileirar(async () => {
       const lim = ops.map(o => ({ path: o.path, data: o.data === null ? null : clone(o.data) }));
-      try {
-        const tx = idb.transaction("docs", "readwrite"), st = tx.objectStore("docs");
-        const fim = new Promise((ok, no) => { tx.oncomplete = ok; tx.onerror = () => no(tx.error); tx.onabort = () => no(tx.error); });
-        fim.catch(() => {});
-        try { for (const o of lim) if (o.data === null) st.delete(o.path); else st.put(o.data, o.path); }
-        catch (e) { try { tx.abort(); } catch {} throw e; }
-        await fim;
-      } catch (e) { throw erroDb(e); }
+      try { await persist.lote(lim); } catch (e) { throw erroDb(e); }
       aplicarLote(lim);
       try { canal && canal.postMessage({ lote: lim }); } catch {}
     });
