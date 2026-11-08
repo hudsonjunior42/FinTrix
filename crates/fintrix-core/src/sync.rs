@@ -238,11 +238,18 @@ pub fn conectar(destino: &Destino) -> Resultado<Arc<dyn ObjectStore>> {
                 // o painel do B2 mostra o endpoint sem "https://"
                 b = b.with_endpoint(if endpoint.contains("://") { endpoint.to_string() } else { format!("https://{endpoint}") });
             }
+            // with_client_options troca as opções inteiras: tudo do cliente HTTP vai neste mesmo objeto
+            #[allow(unused_mut)]
+            let mut opcoes = object_store::ClientOptions::new();
             #[cfg(target_os = "android")]
             {
-                b = b.with_client_options(opcoes_android());
+                opcoes = opcoes_android(opcoes);
             }
-            Arc::new(b.build().map_err(erro)?)
+            // http só no build de debug (testes com test/s3_local.py); o app de verdade exige https
+            if cfg!(debug_assertions) && endpoint.starts_with("http://") {
+                opcoes = opcoes.with_allow_http(true);
+            }
+            Arc::new(b.with_client_options(opcoes).build().map_err(erro)?)
         }
     })
 }
@@ -250,8 +257,7 @@ pub fn conectar(destino: &Destino) -> Resultado<Arc<dyn ObjectStore>> {
 /// No Android o rustls não acha sozinho as raízes do sistema (o erro é `UnknownIssuer`): carrega as do
 /// repositório do próprio Android, que o sistema atualiza (no Android 14+ pelo módulo Conscrypt, em /apex).
 #[cfg(target_os = "android")]
-fn opcoes_android() -> object_store::ClientOptions {
-    let mut o = object_store::ClientOptions::new();
+fn opcoes_android(mut o: object_store::ClientOptions) -> object_store::ClientOptions {
     for dir in ["/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts"] {
         let Ok(arqs) = std::fs::read_dir(dir) else { continue };
         for a in arqs.flatten() {

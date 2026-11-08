@@ -500,12 +500,23 @@ async fn sync_agora(app: AppHandle, versao: u32) -> Result<Value, String> {
     ciclo(&app).await
 }
 
+/// No celular o cofre só pode ser bucket: o app não enxerga a pasta do Syncthing pelo caminho (docs/android.md).
+fn destino_aceito(destino: &Destino) -> Result<(), String> {
+    if cfg!(mobile) && matches!(destino, Destino::Pasta { .. }) {
+        return Err("Este cofre fica numa pasta sincronizada, e no celular a sincronização é só por bucket S3. \
+                    No computador, desligue a sincronização e ligue de novo escolhendo um bucket (Configurações › Seus dados)."
+            .into());
+    }
+    Ok(())
+}
+
 /// Cria um cofre com os dados deste aparelho e começa o primeiro envio. Devolve { codigo, enviando }.
 /// O primeiro envio (estado e todos os comprovantes) pode levar minutos num bucket: espera até 15 s para
 /// pegar os erros rápidos (chave, endpoint, bucket); depois disso devolve o código e o envio continua em
 /// segundo plano, com o andamento no status. Se esse primeiro envio falhar, a sincronização é desligada.
 #[tauri::command]
 async fn sync_criar(app: AppHandle, destino: Destino, versao: u32) -> Result<Value, String> {
+    destino_aceito(&destino)?;
     let store = app.state::<Banco>().store()?;
     let cofre = Cofre::novo(destino).map_err(texto)?;
     sync::conectar(&cofre.destino).map_err(texto)?;
@@ -544,6 +555,7 @@ async fn sync_entrar(app: AppHandle, codigo: String, pasta: Option<String>, vers
     if let (Destino::Pasta { pasta: p }, Some(nova)) = (&mut cofre.destino, pasta.filter(|x| !x.trim().is_empty())) {
         *p = nova;
     }
+    destino_aceito(&cofre.destino)?;
     let aparelhos = sync::verificar(&cofre).await.map_err(texto)?;
     store.esvaziar_documentos().map_err(texto)?;
     sync::salvar_cofre(&store, Some(&cofre)).map_err(texto)?;
@@ -558,6 +570,14 @@ fn sync_codigo(banco: State<Banco>) -> Result<String, String> {
     let store = banco.store()?;
     let c = sync::cofre_salvo(&store).map_err(texto)?.ok_or("a sincronização está desligada")?;
     c.codigo().map_err(texto)
+}
+
+/// QR code (SVG) de um texto: o código de pareamento na tela do computador, para o celular ler com a câmera.
+#[tauri::command]
+fn qr_svg(texto: String) -> Result<String, String> {
+    let qr = qrcode::QrCode::with_error_correction_level(texto.as_bytes(), qrcode::EcLevel::M)
+        .map_err(|e| format!("não foi possível gerar o QR code: {e}"))?;
+    Ok(qr.render::<qrcode::render::svg::Color>().quiet_zone(true).min_dimensions(240, 240).build())
 }
 
 /// Desliga neste aparelho. Os dados continuam aqui e no cofre.
@@ -611,7 +631,7 @@ pub fn run() {
     let construtor = tauri::Builder::default().plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_fs::init());
     // antes do setup: abrir_banco já lê a chave por ele
     #[cfg(mobile)]
-    let construtor = construtor.plugin(chaveiro::plugin()).plugin(arquivos::plugin());
+    let construtor = construtor.plugin(chaveiro::plugin()).plugin(arquivos::plugin()).plugin(tauri_plugin_barcode_scanner::init());
     construtor
         .setup(|app| {
             let dir = pasta_de_dados(app.handle())?;
@@ -679,6 +699,7 @@ pub fn run() {
             sync_criar,
             sync_entrar,
             sync_codigo,
+            qr_svg,
             sync_desligar,
             escolher_pasta,
             teste_fim

@@ -583,6 +583,7 @@ details.more[open] summary{margin-bottom:12px}
 .anx-acoes{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .anx-acoes .btn svg{width:14px;height:14px}
 .anx-view{z-index:55}
+.sy-qr{display:flex;justify-content:center;margin-top:12px}.sy-qr svg{width:240px;height:240px;border-radius:8px;background:#fff}
 .anx-corpo{align-items:center;justify-content:center;min-height:200px}
 .anx-corpo img{max-width:100%;max-height:70vh;object-fit:contain;border-radius:8px}
 .anx-corpo iframe{width:100%;height:70vh;border:0;border-radius:8px;background:#fff}
@@ -733,6 +734,7 @@ const ICON = {
   "g-rosca": '<circle cx="12" cy="12" r="7.5" stroke-width="3.6" opacity=".4"/><path d="M12 4.5a7.5 7.5 0 0 1 7.5 7.5" stroke-width="3.6" stroke-linecap="butt"/>',
   "g-blocos": '<rect x="3" y="3.5" width="9.5" height="17" rx="1.6"/><rect x="14.5" y="3.5" width="6.5" height="7.5" rx="1.6"/><rect x="14.5" y="13" width="6.5" height="7.5" rx="1.6"/>'
 };
+ICON.qr = '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3M21 14v.01M14 21h3M21 17v4h-1"/>';
 ICON.clipe = '<path d="M21 11.5l-8.6 8.6a5.3 5.3 0 0 1-7.5-7.5l8.6-8.6a3.5 3.5 0 0 1 5 5l-8.6 8.6a1.8 1.8 0 0 1-2.5-2.5l7.9-7.9"/>';
 ICON.patrimonio = '<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>';
 ICON.importar = '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 17v3h16v-3"/>';
@@ -1286,9 +1288,11 @@ function persistTauri() {
   };
 }
 const nativoTauri = () => !!(window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === "function");
-const aqui = () => nativoTauri() ? "neste computador" : "neste navegador";
-// app Android (o mesmo Tauri do desktop): a WebView não mostra PDF, o "Salvar como" é o seletor do sistema
+const aqui = () => nativoTauri() ? `neste ${aparelho()}` : "neste navegador";
+// app Android (o mesmo Tauri do desktop): a WebView não mostra PDF, o "Salvar como" é o seletor do sistema,
+// a sincronização é só por bucket e o pareamento pode ser pelo QR code
 const celular = () => nativoTauri() && /Android/i.test(navigator.userAgent);
+const aparelho = () => celular() ? "celular" : "computador";
 // texto da versão web ou do app desktop (lá não há navegador, página nem download: os arquivos são salvos)
 const tx = (web, desktop) => nativoTauri() ? desktop : web;
 // No app desktop, os outros IndexedDB (sistema: cópias automáticas; anexos: comprovantes) viram lojas do SQLite cifrado.
@@ -1492,7 +1496,7 @@ function iniciarSync() {
 function blocoSync(li) {
   if (!nativoTauri()) return "";
   const y = S.sync || {};
-  if (!y.ligado) return li("Sincronização", `Desligada: os dados ficam só neste computador. Ligue para usar o FinTrix em outros aparelhos. Tudo é cifrado aqui antes de sair, para uma pasta sincronizada (Syncthing, Nextcloud) ou um bucket S3 (Cloudflare R2, Backblaze B2).${y.erro ? `<br>${erroSyncHtml(y.erro)}` : ""}`,
+  if (!y.ligado) return li("Sincronização", `Desligada: os dados ficam só ${aqui()}. Ligue para usar o FinTrix em outros aparelhos. Tudo é cifrado aqui antes de sair, ${celular() ? "para um bucket S3 (Cloudflare R2, Backblaze B2)" : "para uma pasta sincronizada (Syncthing, Nextcloud) ou um bucket S3 (Cloudflare R2, Backblaze B2)"}.${y.erro ? `<br>${erroSyncHtml(y.erro)}` : ""}`,
     '<button class="btn sm pri" data-act="sync-criar">Ligar</button><button class="btn sm" data-act="sync-entrar">Entrar num cofre</button>');
   const outros = y.outros ? plural(y.outros, "outro aparelho", "outros aparelhos") : "nenhum outro aparelho ainda";
   const quando = y.sincronizando ? (y.ultimo ? " · sincronizando…" : " · enviando os dados pela primeira vez…") : y.ultimo ? ` · última: ${esc(dataHora(y.ultimo))}` : "";
@@ -1514,12 +1518,13 @@ const campoPasta = () => `<div class="f"><label for="sy-p">Pasta</label><div sty
 function abrirSyncCriar() {
   abrirJanela(`<div class="mhead"><h3>Ligar a sincronização</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>
     <form class="mbody" id="f-sync">
-      <div class="hint">Os dados deste computador vão para um cofre cifrado. Os outros aparelhos entram nele com o código de pareamento que aparece no fim.</div>
-      <div class="f"><span class="flab">Onde fica o cofre</span>
-        <label class="opc"><input type="radio" name="sy-tipo" value="pasta" checked><span><b>Pasta sincronizada</b><br>Uma pasta que o Syncthing, o Nextcloud ou o Dropbox já leva para os outros aparelhos.</span></label>
-        <label class="opc"><input type="radio" name="sy-tipo" value="s3"><span><b>Bucket S3</b><br>Cloudflare R2, Backblaze B2, AWS ou outro compatível. Crie uma chave de acesso só para este bucket.</span></label></div>
-      <div id="sy-pasta">${campoPasta()}</div>
-      <div id="sy-s3" hidden>
+      <div class="hint">Os dados deste ${aparelho()} vão para um cofre cifrado. Os outros aparelhos entram nele com o código de pareamento que aparece no fim.</div>
+      <div class="f"${celular() ? " hidden" : ""}><span class="flab">Onde fica o cofre</span>
+        <label class="opc"><input type="radio" name="sy-tipo" value="pasta"${celular() ? "" : " checked"}><span><b>Pasta sincronizada</b><br>Uma pasta que o Syncthing, o Nextcloud ou o Dropbox já leva para os outros aparelhos.</span></label>
+        <label class="opc"><input type="radio" name="sy-tipo" value="s3"${celular() ? " checked" : ""}><span><b>Bucket S3</b><br>Cloudflare R2, Backblaze B2, AWS ou outro compatível. Crie uma chave de acesso só para este bucket.</span></label></div>
+      <div id="sy-pasta"${celular() ? " hidden" : ""}>${campoPasta()}</div>
+      ${celular() ? `<div class="hint">No celular o cofre fica num bucket S3 (Cloudflare R2, Backblaze B2, AWS ou outro compatível).</div>` : ""}
+      <div id="sy-s3"${celular() ? "" : " hidden"}>
         <div class="f"><label for="sy-end">Endpoint</label><input class="inp" id="sy-end" placeholder="https://<conta>.r2.cloudflarestorage.com" autocomplete="off" spellcheck="false"><span class="hint">Vazio para a AWS.</span></div>
         <div class="row2"><div class="f"><label for="sy-bucket">Bucket</label><input class="inp" id="sy-bucket" autocomplete="off" spellcheck="false"></div>
           <div class="f"><label for="sy-reg">Região</label><input class="inp" id="sy-reg" placeholder="auto" autocomplete="off" spellcheck="false"></div></div>
@@ -1569,11 +1574,14 @@ async function syncCriar() {
 async function syncMostrarCodigo(codigo, enviando) {
   if (!codigo) { try { codigo = await invT("sync_codigo"); } catch (e) { toast(String(e)); return; } }
   abrirJanela(`<div class="mhead"><h3>Código de pareamento</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>
-    <div class="mbody"><div class="hint">No outro aparelho: num aparelho novo, "Parear com outro aparelho" na apresentação; num que já tem dados, Configurações › Seus dados › Sincronização › Entrar num cofre. Depois, cole este código.</div>
+    <div class="mbody"><div class="hint">No outro aparelho: num aparelho novo, "Parear com outro aparelho" na apresentação; num que já tem dados, Configurações › Seus dados › Sincronização › Entrar num cofre. No celular, toque em Ler QR code e aponte a câmera para o código abaixo; num computador, cole o código em texto.</div>
+      <div class="sy-qr" id="sy-qr" aria-label="QR code do código de pareamento"></div>
       <div class="hint warn" style="margin-top:8px">O código tem a chave do cofre e o acesso ao destino: quem tiver o código lê seus dados. Não mande por e-mail ou mensagem; copie de um aparelho para o outro e não guarde junto com backups.</div>
       ${enviando ? `<div class="hint" style="margin-top:8px">Os dados ainda estão sendo enviados pela primeira vez (com comprovantes, pode levar alguns minutos). Pode fechar esta janela: o envio continua. Pareie os outros aparelhos depois que Configurações › Seus dados mostrar a hora da última sincronização.</div>` : ""}
       <textarea class="inp num" id="sy-cod" readonly rows="5" style="margin-top:12px;width:100%;word-break:break-all">${esc(codigo)}</textarea></div>
     <div class="mfoot"><span class="sp"></span><button class="btn" data-act="sync-copiar">Copiar</button><button class="btn pri" data-act="fechar">Fechar</button></div>`, "sm");
+  // SVG gerado no Rust (qr_svg) a partir do código: nada vindo de fora entra aqui
+  try { const qr = await invT("qr_svg", { texto: codigo }); if ($("#sy-qr")) $("#sy-qr").innerHTML = qr; } catch (e) { $("#sy-qr")?.remove(); }
 }
 async function syncCopiar() {
   const t = $("#sy-cod"); if (!t) return;
@@ -1584,19 +1592,20 @@ function abrirSyncEntrar() {
   const novo = !S.cfg;
   abrirJanela(`<div class="mhead"><h3>${novo ? "Parear com outro aparelho" : "Entrar num cofre"}</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>
     <form class="mbody" id="f-sync-e">
-      ${novo ? `<div class="hint">Este computador passa a usar os mesmos dados de um aparelho onde o FinTrix já está em uso, e os dois ficam sincronizados.</div>
+      ${novo ? `<div class="hint">Este ${aparelho()} passa a usar os mesmos dados de um aparelho onde o FinTrix já está em uso, e os dois ficam sincronizados.</div>
         <ol class="hint" style="margin:8px 0 0;padding-left:20px;text-align:left">
           <li>No outro aparelho, abra Configurações › Seus dados › Sincronização.</li>
           <li>Se a sincronização estiver desligada, toque em Ligar e escolha onde fica o cofre; se já estiver ligada, toque em Parear aparelho.</li>
-          <li>Copie o código de pareamento que aparece lá e cole abaixo.</li></ol>`
+          <li>${celular() ? "Toque em Ler QR code e aponte a câmera para o código que aparece lá (ou cole o código abaixo)." : "Copie o código de pareamento que aparece lá e cole abaixo."}</li></ol>`
         : `<div class="hint">Cole o código de pareamento que aparece no outro aparelho (Configurações › Seus dados › Sincronização › Parear aparelho).</div>
-      <div class="hint warn" style="margin-top:8px">Os dados deste computador serão trocados pelos do cofre. Antes, o app guarda uma cópia automática deles.</div>`}
+      <div class="hint warn" style="margin-top:8px">Os dados deste ${aparelho()} serão trocados pelos do cofre. Antes, o app guarda uma cópia automática deles.</div>`}
+      ${celular() ? `<button type="button" class="btn lg" data-act="sync-ler-qr" style="width:100%;margin-top:12px">${svg("qr", 2)}Ler QR code</button>` : ""}
       <div class="f"><label for="sy-cod-in">Código de pareamento</label><textarea class="inp num" id="sy-cod-in" rows="4" autocomplete="off" spellcheck="false"></textarea></div>
-      ${campoPasta().replace('>Pasta<', '>Pasta do cofre neste computador (só se o cofre for uma pasta)<')}
+      ${celular() ? "" : campoPasta().replace('>Pasta<', '>Pasta do cofre neste computador (só se o cofre for uma pasta)<')}
       <div class="err" id="m-err"></div></form>
     <div class="mfoot"><span class="sp"></span><button class="btn" data-act="fechar">Cancelar</button><button class="btn pri" data-act="sync-entrar-ok">${novo ? "Parear" : "Entrar"}</button></div>`, "sm");
   $("#f-sync-e").addEventListener("submit", ev => { ev.preventDefault(); syncEntrar(); });
-  $("#sy-cod-in").focus();
+  if (!celular()) $("#sy-cod-in").focus(); // no celular o teclado cobriria o botão do QR
 }
 async function syncEntrar() {
   const codigo = $("#sy-cod-in").value.trim(), err = $("#m-err"), btn = $('[data-act="sync-entrar-ok"]');
@@ -1608,6 +1617,21 @@ async function syncEntrar() {
     await invT("sync_entrar", { codigo, pasta: ($("#sy-p")?.value || "").trim() || null, versao: VERSAO_DADOS });
     location.reload();
   } catch (e) { mostrarErroSync(e); btn.disabled = false; btn.textContent = rotulo; }
+}
+// celular: lê o código de pareamento pela câmera (plugin barcode-scanner) e já pareia
+async function syncLerQr() {
+  const err = $("#m-err"); err.textContent = "";
+  try {
+    const p = await invT("plugin:barcode-scanner|check_permissions");
+    if (p.camera !== "granted" && (await invT("plugin:barcode-scanner|request_permissions")).camera !== "granted") {
+      err.textContent = "Sem acesso à câmera: libere nas configurações do Android ou cole o código."; return;
+    }
+    const r = await invT("plugin:barcode-scanner|scan", { windowed: false, formats: ["QR_CODE"] });
+    const codigo = String(r?.content || "").trim();
+    if (!codigo.startsWith("FTX1.")) { err.textContent = "Esse QR code não é um código de pareamento do FinTrix."; return; }
+    $("#sy-cod-in").value = codigo;
+    syncEntrar();
+  } catch (e) { if (!/cancel/i.test(String(e))) err.textContent = String(e); }
 }
 async function syncEscolherPasta() {
   try { const p = await invT("escolher_pasta"); if (p) $("#sy-p").value = p; } catch (e) { toast(String(e)); }
@@ -1843,7 +1867,7 @@ function renderOnboarding(el) {
       ${nativoTauri() ? '<button class="btn lg" data-act="sync-entrar">Parear com outro aparelho</button>' : ""}
       ${COPIAS.n ? `<button class="btn ghost onb-copias" data-act="copias">Recuperar uma cópia automática</button>` : ""}
       <input type="file" id="imp-json" accept=".json,application/json" class="sr" tabindex="-1" aria-hidden="true">
-      <div class="hint onb-nota">${S.modo === "local" ? (nativoTauri() ? "Os dados ficam neste computador, num banco cifrado." : "Os dados ficam guardados neste navegador.") : "Os dados ficam salvos na sua conta claude.ai."}</div>
+      <div class="hint onb-nota">${S.modo === "local" ? (nativoTauri() ? `Os dados ficam ${aqui()}, num banco cifrado.` : "Os dados ficam guardados neste navegador.") : "Os dados ficam salvos na sua conta claude.ai."}</div>
     </div>
     <div id="dados-msg" class="hint" aria-live="polite"></div>
     <form class="panel onb-form" id="o-form" hidden autocomplete="off">
@@ -4674,7 +4698,7 @@ const A = {
   "chave-ver": () => verChave(),
   "sync-criar": () => abrirSyncCriar(), "sync-criar-ok": () => syncCriar(),
   "sync-entrar": () => abrirSyncEntrar(), "sync-entrar-ok": () => syncEntrar(),
-  "sync-escolher": () => syncEscolherPasta(), "sync-codigo": () => syncMostrarCodigo(), "sync-copiar": () => syncCopiar(),
+  "sync-escolher": () => syncEscolherPasta(), "sync-ler-qr": () => syncLerQr(), "sync-codigo": () => syncMostrarCodigo(), "sync-copiar": () => syncCopiar(),
   "sync-agora": () => syncAgora(), "sync-desligar": () => syncDesligar(),
   "seg-geral": () => { S.view = "geral"; lsSet("view", "geral"); fecharJanela(); render(); },
   "copiar-erro": async () => { try { await navigator.clipboard.writeText(ULT_ERRO); toast("Detalhes copiados"); } catch { toast("Não foi possível copiar."); } },
@@ -4799,7 +4823,11 @@ document.addEventListener("drop", ev => {
   if (/\.(ofx|qfx|csv|txt)$/i.test(f.name) && !janelaAberta()) abrirImportar(null, f);
   else if (!janelaAberta()) toast("Para importar, use um arquivo OFX ou CSV do banco.");
 });
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") backupAuto(false); });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") backupAuto(false);
+  // app desktop/Android: ao voltar, sincroniza logo (no celular o laço de 1 minuto fica parado em segundo plano)
+  else if (nativoTauri() && S.sync?.ligado) invT("sync_agora", { versao: VERSAO_DADOS }).catch(() => {});
+});
 
 render();
 boot().catch(e => { console.error(e); S.fase = "erro"; render(); });

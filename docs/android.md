@@ -47,8 +47,10 @@ Primeiro marco: `cargo build -p fintrix-core --target aarch64-linux-android` e `
 
 - **Bucket S3**: funciona igual; é o destino recomendado para quem usa o celular.
 - **Pasta sincronizada**: no Android o app não enxerga a pasta do Syncthing pelo caminho. Duas saídas: (a) usar SAF (`ACTION_OPEN_DOCUMENT_TREE`) e um destino novo em `sync.rs` que lê e grava por um plugin Kotlin; (b) na primeira versão, aceitar só S3 no Android e avisar no pareamento quando o código for de pasta. **Decidido: (b) primeiro**, (a) depois.
-- **Quando sincronizar**: o laço `sincronizar_sempre` só roda com o app aberto, e o Android suspende apps em segundo plano. Sincronizar ao abrir, ao voltar para o app (evento de foco/`visibilitychange`) e depois de cada gravação, como hoje. Segundo plano de verdade (WorkManager) fica para depois.
-- **Pareamento pelo celular**: digitar o código é ruim. Adicionar um QR code na janela "Código de pareamento" do desktop e um leitor no Android (plugin `barcode-scanner` do Tauri). O QR fica só na tela, como o código.
+- **Quando sincronizar** (feito): o laço `sincronizar_sempre` só roda com o app aberto, e o Android o congela em segundo plano. A interface sincroniza ao abrir, ao voltar para o app (`visibilitychange`) e depois de cada gravação. Segundo plano de verdade (WorkManager) fica para depois.
+- **Só bucket no celular** (feito): "Ligar a sincronização" mostra só o bucket; `destino_aceito` recusa cofre em pasta no `sync_criar` e no `sync_entrar` (código de pareamento de um cofre em pasta) com uma mensagem que explica o que fazer no computador.
+- **Pareamento pelo QR code** (feito): a janela "Código de pareamento" mostra o QR (`qr_svg`, crate `qrcode`, gerado no Rust) acima do código em texto, no computador e no celular. No celular, "Parear com outro aparelho"/"Entrar num cofre" tem **Ler QR code** (plugin oficial `barcode-scanner`, só no Android; permissões em `capabilities/celular.json`), que lê e já pareia. O QR fica só na tela, como o código.
+- **Teste**: `python3 test/android_sync.py` sobe um S3 local (`test/s3_local.py`, http só no build de debug; o celular chega nele por `adb reverse`), abre o FinTrix de teste no PC com os dados de `fase1.js` e o QR, e espera o celular parear e lançar "Farmácia do celular" (R$ 45,00).
 
 ## 4. Interface (`index.html`)
 
@@ -82,7 +84,8 @@ Primeiro marco: `cargo build -p fintrix-core --target aarch64-linux-android` e `
   - S3: no Android o rustls não achava as raízes (`UnknownIssuer`); `sync::opcoes_android` carrega as do sistema (`/apex/com.android.conscrypt/cacerts` ou `/system/etc/security/cacerts`). Com chaves falsas, a AWS responde 403, ou seja, o TLS funciona.
 - **Etapa 3 feita**: chave no Android Keystore (veja o item 2). Conferido no celular: app novo cria e guarda a chave; reabrir entra direto; sem a chave, o banco fica trancado, a chave errada é recusada e a de recuperação abre e volta a ser guardada. Ícone do FinTrix no lugar do padrão do Tauri; backup do Android desligado.
 - **Etapa 4 feita**: salvar pelo seletor do sistema (conferido: arquivo chegou em Downloads), comprovantes de 1 kB e 3 MB gravados e lidos sem diferença, PDF aberto no leitor do sistema. Falta conferir à mão o seletor do "Restaurar backup" e do "Anexar foto ou PDF" (precisa de toque de verdade).
-- Próxima: etapa 5 (sincronização por S3 no celular, pareamento, QR code).
+- **Etapa 5 feita**: no celular, a sincronização é só por bucket, sincroniza ao voltar para o app e pareia pelo QR code mostrado no computador. Conferido com `test/android_sync.py`: o celular leu o QR, recebeu conta, despesa e comprovante, lançou uma despesa que chegou ao PC; o cofre tem os dois aparelhos e nada em claro.
+- Próxima: etapa 6 (ajustes de interface: botão voltar, textos "computador"/"navegador", áreas seguras).
 
 ### Como compilar e testar no celular
 

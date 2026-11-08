@@ -88,7 +88,8 @@ O mesmo app do desktop (Tauri) no celular; plano e andamento em [android.md](and
 - Chave do banco no Android Keystore (no desktop, no chaveiro do sistema); backup automático do Android desligado.
 - Salvar (backup, CSV, comprovantes, .zip) abre o "Salvar como" do sistema.
 - Comprovante em PDF: o visualizador não mostra o PDF; o botão Abrir entrega o arquivo ao leitor de PDF do celular.
-- Sincronização só por bucket S3 (escolher pasta responde que no celular é só bucket).
+- Sincronização só por bucket S3: "Ligar" mostra só o bucket e um código de cofre em pasta é recusado com explicação. Sincroniza também ao voltar para o app.
+- Pareamento: "Parear com outro aparelho"/"Entrar num cofre" tem **Ler QR code** (câmera), que lê o QR da janela "Código de pareamento" do outro aparelho e já pareia.
 
 ## Verificação
 

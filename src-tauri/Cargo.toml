@@ -22,6 +22,13 @@ tauri-plugin-fs = "2"
 # sincronização em segundo plano
 tokio = { version = "1", features = ["time", "sync", "macros"] }
 
+# QR code do código de pareamento
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+
+# leitor de QR code (câmera) para parear o celular
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-barcode-scanner = "2"
+
 # chave do banco no chaveiro do sistema (Secret Service no Linux, Keychain, Credential Manager); no celular, outro caminho
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }

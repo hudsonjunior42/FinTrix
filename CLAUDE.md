@@ -23,6 +23,7 @@ tools/tauri_prep.py      copia index.html + assets para dist/tauri/ (troca Googl
 tools/icones_android.py  ícones do app Android a partir de assets/logo.svg
 test/desktop.py          testa o app desktop pela interface; roteiros em test/desktop/*.js
 test/android/avaliar.mjs avalia JS na WebView do app Android (DevTools pelo adb forward)
+test/android_sync.py     PC ↔ celular: pareamento pelo QR e sincronização num S3 local (test/s3_local.py)
 test/ui/, test/*.py      testes da versão web (Playwright, não instalado nesta máquina)
 docs/                    especificacao.md, desktop-tauri.md, sincronizacao.md, bucket-s3.md, android.md (plano)
 ```
