@@ -27,4 +27,5 @@ desktop.ini
 
 # Rust / Tauri
 target/
-src-tauri/gen/
+# gen/android é o projeto Gradle do app Android (vai para o git, com o .gitignore dele); os schemas são gerados
+src-tauri/gen/schemas/

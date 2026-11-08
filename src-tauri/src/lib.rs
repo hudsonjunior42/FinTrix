@@ -14,9 +14,12 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use tauri_plugin_dialog::DialogExt;
 
 /// Igual ao `identifier` do tauri.conf.json: nome do serviço no chaveiro e da pasta de dados.
+#[cfg(desktop)]
 const SERVICO: &str = "io.github.hudsonjunior42.fintrix";
 /// Identificador das primeiras versões do protótipo; os dados de lá são trazidos uma vez.
+#[cfg(desktop)]
 const ANTIGO: &str = "br.com.fintrix.app";
+#[cfg(desktop)]
 const USUARIO: &str = "chave-do-banco";
 
 /// O banco aberto e a chave dele. Fica vazio (trancado) quando a chave não está no chaveiro:

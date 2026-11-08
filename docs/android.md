@@ -15,7 +15,7 @@ O que já serve sem mudança: a interface (já funciona em 380 px, com toque, e 
 
 Esta máquina já tem o `adb` (pacote `android-tools`) e o `tauri-cli` 2.12; falta o resto:
 
-- Android Studio → SDK Manager: Android SDK Platform 34, Build-Tools, Platform-Tools, NDK (Side by side) 26+ e Command-line Tools. Variáveis (no fish, em `~/.config/fish/config.fish`): `JAVA_HOME` (o JBR do Android Studio, `…/android-studio/jbr`), `ANDROID_HOME=~/Android/Sdk`, `NDK_HOME=$ANDROID_HOME/ndk/<versão>`.
+- Android Studio → SDK Manager: Android SDK Platform 37 (o `compileSdk`/`targetSdk` do modelo do tauri-cli 2.12; o `minSdk` é 24, então roda do Android 7 em diante), Build-Tools, Platform-Tools, NDK (Side by side) 26+ e Command-line Tools. Variáveis (no fish, em `~/.config/fish/config.fish`): `JAVA_HOME` (o JBR do Android Studio, `…/android-studio/jbr`), `ANDROID_HOME=~/Android/Sdk`, `NDK_HOME=$ANDROID_HOME/ndk/<versão>`.
 - Alvos Rust: `rustup target add aarch64-linux-android armv7-linux-androideabi` (celulares atuais são aarch64; o armv7 cobre os antigos). O `x86_64-linux-android` só se o emulador entrar.
 - No celular: opções do desenvolvedor → depuração USB; `adb devices` precisa listar o aparelho.
 - `cargo tauri android init` cria `src-tauri/gen/android/` (projeto Gradle). Vai para o git, com o ícone e o nome do app ajustados.
@@ -61,7 +61,7 @@ Primeiro marco: `cargo build -p fintrix-core --target aarch64-linux-android` e `
 ## 5. Testes
 
 - `cargo test -p fintrix-core` no host (cobre a mesclagem e a cifra, que são as mesmas).
-- Celular real pela USB com `cargo tauri android dev` (build de debug), dados de teste e um bucket de teste (ou MinIO rodando no PC, na mesma rede); nunca os dados reais. O build de debug usa a chave fixa de teste e fica ao lado de um eventual FinTrix de verdade só se tiver outro `identifier` (sufixo `.debug`), para não misturar dados.
+- Celular real pela USB com o build de debug (veja "Como compilar e testar no celular"), dados de teste e um bucket de teste (ou MinIO rodando no PC, na mesma rede); nunca os dados reais. O build de debug usa a chave fixa de teste e fica ao lado de um eventual FinTrix de verdade só se tiver outro `identifier` (sufixo `.debug`), para não misturar dados.
 - Adaptar o `test/desktop.py` para Android é caro (o roteiro entra por `FINTRIX_TESTE`, que lê um arquivo do PC). Mais simples: `adb push` do roteiro para `/data/local/tmp/` e `adb shell run-as <id> cp …` para a pasta do app (o `run-as` só funciona no build de debug); o resultado sai pelo log (`adb logcat`). Depuração da WebView: `chrome://inspect` no Chrome do PC.
 - Teste manual de ponta a ponta: desktop liga o cofre S3 → celular pareia pela apresentação → lança dos dois lados → os dois veem tudo.
 
@@ -75,8 +75,27 @@ Primeiro marco: `cargo build -p fintrix-core --target aarch64-linux-android` e `
 
 ## Andamento
 
-- Feito: alvos Rust do Android instalados; casca movida para `lib.rs` com `run()` e `mobile_entry_point` (o `main.rs` só chama `run`); `keyring`, `migrar_do_antigo`, ícone e tamanho da janela só no desktop; no celular, `escolher_pasta` responde que lá é só bucket e a chave é fixa de teste no debug (release ainda sem chaveiro); SQLCipher com OpenSSL vendorizado no alvo Android. Desktop conferido (`cargo test -p fintrix-core`, `test/desktop.py`).
-- Falta para fechar a etapa 1: Android Studio (SDK + NDK), `cargo tauri android init` e o app abrindo no celular. O código do celular (`cfg(mobile)`) ainda não foi compilado: o `ring` e o SQLCipher precisam do clang do NDK.
+- **Etapas 1 e 2 feitas** (nov/2026), conferidas num Redmi Note 11 (Android 13, arm64):
+  - casca em `lib.rs` com `run()` e `mobile_entry_point` (o `main.rs` só chama `run`); `keyring`, `migrar_do_antigo`, ícone e tamanho da janela só no desktop; no celular, `escolher_pasta` responde que lá é só bucket e a chave é fixa de teste no debug (release ainda sem chaveiro);
+  - projeto Gradle em `src-tauri/gen/android/` (vai para o git); SQLCipher com OpenSSL compilado junto no alvo Android;
+  - o app abre na apresentação, o banco fica cifrado em `/data/data/<id>/fintrix.db` (600) e uma gravação sobrevive a fechar e reabrir;
+  - S3: no Android o rustls não achava as raízes (`UnknownIssuer`); `sync::opcoes_android` carrega as do sistema (`/apex/com.android.conscrypt/cacerts` ou `/system/etc/security/cacerts`). Com chaves falsas, a AWS responde 403, ou seja, o TLS funciona.
+- Próxima: etapa 3 (chave no Android Keystore).
+
+### Como compilar e testar no celular
+
+```bash
+# variáveis (no fish: ~/.config/fish/conf.d/android.fish com set -gx)
+export JAVA_HOME=/opt/android-studio/jbr ANDROID_HOME=$HOME/Android/Sdk
+export NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370
+cargo tauri android build --debug --apk --target aarch64
+adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+adb shell am start -n io.github.hudsonjunior42.fintrix/.MainActivity
+```
+
+- Xiaomi/MIUI: além da depuração USB, ligar "Instalar via USB" nas opções do desenvolvedor. O MIUI também bloqueia toques simulados (`adb shell input`) sem "Depuração USB (configurações de segurança)".
+- Para inspecionar ou testar sem tocar na tela: a WebView de debug expõe o DevTools. `adb forward tcp:9333 localabstract:webview_devtools_remote_$(adb shell pidof io.github.hudsonjunior42.fintrix)` e depois `node test/android/avaliar.mjs 9333 'S.fase'` (avalia a expressão na página e imprime o resultado; aceita `await` dentro de uma função `async`). Ou `chrome://inspect` no Chrome do PC.
+- O build de debug usa uma chave fixa: só dados de teste no celular até a etapa 3.
 
 ## Ordem sugerida
 

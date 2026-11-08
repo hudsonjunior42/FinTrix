@@ -16,10 +16,12 @@ App de finanças pessoais. Duas formas de rodar o mesmo `index.html`:
 
 ```
 index.html               o app inteiro (HTML, CSS e JS num arquivo só, sem build)
+src-tauri/gen/android/   projeto Gradle do app Android (gerado por `cargo tauri android init`, ajustado à mão)
 crates/fintrix-core/     Rust: banco cifrado (lib.rs), campos com carimbo (campos.rs), sincronização (sync.rs)
 src-tauri/               casca Tauri: janela, chave no chaveiro, comandos invoke, empacotamento
 tools/tauri_prep.py      copia index.html + assets para dist/tauri/ (troca Google Fonts por assets/fonts/)
 test/desktop.py          testa o app desktop pela interface; roteiros em test/desktop/*.js
+test/android/avaliar.mjs avalia JS na WebView do app Android (DevTools pelo adb forward)
 test/ui/, test/*.py      testes da versão web (Playwright, não instalado nesta máquina)
 docs/                    especificacao.md, desktop-tauri.md, sincronizacao.md, bucket-s3.md, android.md (plano)
 ```
@@ -33,7 +35,10 @@ cargo test -p fintrix-core                 # núcleo: banco, mesclagem, cifra, d
 python3 test/desktop.py                    # app desktop pela interface (precisa de tela; roda com o FinTrix do usuário aberto)
 cargo tauri build --bundles appimage,deb   # pacotes em target/release/bundle/ (copiar para dist/linux/)
 python3 tools/tauri_prep.py                # só a cópia do app web (o build já chama)
+cargo tauri android build --debug --apk --target aarch64   # Android; variáveis e passos em docs/android.md
 ```
+
+Android: SDK em `~/Android/Sdk`, NDK 30, JDK do Android Studio (`/opt/android-studio/jbr`); `JAVA_HOME`, `ANDROID_HOME` e `NDK_HOME` precisam estar definidos (veja `docs/android.md`). No celular do usuário só o build de debug com dados de teste.
 
 Checagem rápida da versão web: servir a pasta (`.claude/launch.json` tem `fintrix-web` na porta 8765) e conferir `S.fase`, sem dados reais. Sintaxe do JS: extrair o maior `<script>` do index.html e rodar `node --check`.
 

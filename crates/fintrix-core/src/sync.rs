@@ -238,9 +238,30 @@ pub fn conectar(destino: &Destino) -> Resultado<Arc<dyn ObjectStore>> {
                 // o painel do B2 mostra o endpoint sem "https://"
                 b = b.with_endpoint(if endpoint.contains("://") { endpoint.to_string() } else { format!("https://{endpoint}") });
             }
+            #[cfg(target_os = "android")]
+            {
+                b = b.with_client_options(opcoes_android());
+            }
             Arc::new(b.build().map_err(erro)?)
         }
     })
+}
+
+/// No Android o rustls não acha sozinho as raízes do sistema (o erro é `UnknownIssuer`): carrega as do
+/// repositório do próprio Android, que o sistema atualiza (no Android 14+ pelo módulo Conscrypt, em /apex).
+#[cfg(target_os = "android")]
+fn opcoes_android() -> object_store::ClientOptions {
+    let mut o = object_store::ClientOptions::new();
+    for dir in ["/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts"] {
+        let Ok(arqs) = std::fs::read_dir(dir) else { continue };
+        for a in arqs.flatten() {
+            if let Some(c) = std::fs::read(a.path()).ok().and_then(|pem| object_store::Certificate::from_pem(&pem).ok()) {
+                o = o.with_root_certificate(c);
+            }
+        }
+        break; // o primeiro que existir: o do /apex substitui o do /system
+    }
+    o
 }
 
 /// Resultado de um ciclo.
