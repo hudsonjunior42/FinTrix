@@ -201,8 +201,10 @@ pub fn conectar(destino: &Destino) -> Resultado<Arc<dyn ObjectStore>> {
                 .with_region(if regiao.is_empty() { "auto" } else { regiao })
                 .with_access_key_id(access)
                 .with_secret_access_key(secret);
+            let endpoint = endpoint.trim().trim_end_matches('/');
             if !endpoint.is_empty() {
-                b = b.with_endpoint(endpoint);
+                // o painel do B2 mostra o endpoint sem "https://"
+                b = b.with_endpoint(if endpoint.contains("://") { endpoint.to_string() } else { format!("https://{endpoint}") });
             }
             Arc::new(b.build().map_err(erro)?)
         }
