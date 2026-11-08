@@ -79,7 +79,7 @@ No FinTrix: **Endpoint** vazio · **Região** = a do bucket (ex.: `sa-east-1`) �
 
 1. No FinTrix: **Configurações › Seus dados › Sincronização › Ligar › Bucket S3**, preencha e clique em **Ligar**. Se algo estiver errado (endpoint, região ou chave), a mensagem de erro aparece na própria janela e nada é ligado.
 2. Guarde o **código de pareamento** que aparece. Ele tem a chave do cofre e a chave de acesso ao bucket: quem tiver o código lê seus dados. Não mande por e-mail ou mensagem.
-3. Nos outros aparelhos: **Entrar num cofre** (ou, num aparelho novo, **Usar os dados de outro aparelho**) e cole o código.
+3. Nos outros aparelhos: **Entrar num cofre** (ou, num aparelho novo, **Parear com outro aparelho**) e cole o código.
 
 ## Cuidados
 

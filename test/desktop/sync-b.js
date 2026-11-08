@@ -2,8 +2,10 @@
 T.rodar(async () => {
   await T.espera(() => typeof S !== "undefined" && ["onboarding", "pronto"].includes(S.fase), "abrir", 15000);
   if (S.fase === "onboarding") {
+    T.check("opção de parear na apresentação", T.q('[data-act="sync-entrar"]').textContent, "Parear com outro aparelho");
     T.q('[data-act="sync-entrar"]').click();
     await T.espera(() => T.q("#sy-cod-in"), "janela de entrar");
+    T.check("janela de pareamento", T.q(".mhead h3").textContent, "Parear com outro aparelho");
     T.preencher("#sy-cod-in", "FTX1.errado");
     T.q('[data-act="sync-entrar-ok"]').click();
     await T.espera(() => T.q("#m-err").textContent, "erro do código errado");

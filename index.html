@@ -1527,7 +1527,7 @@ async function syncCriar() {
 async function syncMostrarCodigo(codigo) {
   if (!codigo) { try { codigo = await invT("sync_codigo"); } catch (e) { toast(String(e)); return; } }
   abrirJanela(`<div class="mhead"><h3>Código de pareamento</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>
-    <div class="mbody"><div class="hint">No outro aparelho: Configurações › Seus dados › Sincronização › Entrar num cofre (ou, num aparelho novo, "Usar os dados de outro aparelho"), e cole este código.</div>
+    <div class="mbody"><div class="hint">No outro aparelho: num aparelho novo, "Parear com outro aparelho" na apresentação; num que já tem dados, Configurações › Seus dados › Sincronização › Entrar num cofre. Depois, cole este código.</div>
       <div class="hint warn" style="margin-top:8px">O código tem a chave do cofre e o acesso ao destino: quem tiver o código lê seus dados. Não mande por e-mail ou mensagem; copie de um aparelho para o outro e não guarde junto com backups.</div>
       <textarea class="inp num" id="sy-cod" readonly rows="5" style="margin-top:12px;width:100%;word-break:break-all">${esc(codigo)}</textarea></div>
     <div class="mfoot"><span class="sp"></span><button class="btn" data-act="sync-copiar">Copiar</button><button class="btn pri" data-act="fechar">Fechar</button></div>`, "sm");
@@ -1537,26 +1537,34 @@ async function syncCopiar() {
   try { await navigator.clipboard.writeText(t.value); toast("Código copiado"); } catch { t.select(); toast("Selecionado: use Ctrl+C"); }
 }
 function abrirSyncEntrar() {
-  abrirJanela(`<div class="mhead"><h3>Entrar num cofre</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>
+  // sem S.cfg é a apresentação de um aparelho novo: o texto explica o pareamento do começo
+  const novo = !S.cfg;
+  abrirJanela(`<div class="mhead"><h3>${novo ? "Parear com outro aparelho" : "Entrar num cofre"}</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>
     <form class="mbody" id="f-sync-e">
-      <div class="hint">Cole o código de pareamento que aparece no outro aparelho (Configurações › Seus dados › Sincronização › Parear aparelho).</div>
-      ${S.cfg ? `<div class="hint warn" style="margin-top:8px">Os dados deste computador serão trocados pelos do cofre. Antes, o app guarda uma cópia automática deles.</div>` : ""}
+      ${novo ? `<div class="hint">Este computador passa a usar os mesmos dados de um aparelho onde o FinTrix já está em uso, e os dois ficam sincronizados.</div>
+        <ol class="hint" style="margin:8px 0 0;padding-left:20px;text-align:left">
+          <li>No outro aparelho, abra Configurações › Seus dados › Sincronização.</li>
+          <li>Se a sincronização estiver desligada, toque em Ligar e escolha onde fica o cofre; se já estiver ligada, toque em Parear aparelho.</li>
+          <li>Copie o código de pareamento que aparece lá e cole abaixo.</li></ol>`
+        : `<div class="hint">Cole o código de pareamento que aparece no outro aparelho (Configurações › Seus dados › Sincronização › Parear aparelho).</div>
+      <div class="hint warn" style="margin-top:8px">Os dados deste computador serão trocados pelos do cofre. Antes, o app guarda uma cópia automática deles.</div>`}
       <div class="f"><label for="sy-cod-in">Código de pareamento</label><textarea class="inp num" id="sy-cod-in" rows="4" autocomplete="off" spellcheck="false"></textarea></div>
       ${campoPasta().replace('>Pasta<', '>Pasta do cofre neste computador (só se o cofre for uma pasta)<')}
       <div class="err" id="m-err"></div></form>
-    <div class="mfoot"><span class="sp"></span><button class="btn" data-act="fechar">Cancelar</button><button class="btn pri" data-act="sync-entrar-ok">Entrar</button></div>`, "sm");
+    <div class="mfoot"><span class="sp"></span><button class="btn" data-act="fechar">Cancelar</button><button class="btn pri" data-act="sync-entrar-ok">${novo ? "Parear" : "Entrar"}</button></div>`, "sm");
   $("#f-sync-e").addEventListener("submit", ev => { ev.preventDefault(); syncEntrar(); });
   $("#sy-cod-in").focus();
 }
 async function syncEntrar() {
   const codigo = $("#sy-cod-in").value.trim(), err = $("#m-err"), btn = $('[data-act="sync-entrar-ok"]');
   if (!codigo) { err.textContent = "Cole o código de pareamento."; return; }
-  btn.disabled = true; err.textContent = ""; btn.textContent = "Entrando…";
+  const rotulo = btn.textContent;
+  btn.disabled = true; err.textContent = ""; btn.textContent = S.cfg ? "Entrando…" : "Pareando…";
   try {
     if (S.cfg) await guardarCopia("Antes de entrar num cofre de sincronização");
     await invT("sync_entrar", { codigo, pasta: ($("#sy-p")?.value || "").trim() || null, versao: VERSAO_DADOS });
     location.reload();
-  } catch (e) { err.textContent = String(e); btn.disabled = false; btn.textContent = "Entrar"; }
+  } catch (e) { err.textContent = String(e); btn.disabled = false; btn.textContent = rotulo; }
 }
 async function syncEscolherPasta() {
   try { const p = await invT("escolher_pasta"); if (p) $("#sy-p").value = p; } catch (e) { toast(String(e)); }
@@ -1789,7 +1797,7 @@ function renderOnboarding(el) {
     <div class="onb-acoes">
       <button class="btn pri lg" data-act="onb-conta">Adicionar conta</button>
       <button class="btn lg" data-act="onb-restaurar">Restaurar um backup</button>
-      ${nativoTauri() ? '<button class="btn lg" data-act="sync-entrar">Usar os dados de outro aparelho</button>' : ""}
+      ${nativoTauri() ? '<button class="btn lg" data-act="sync-entrar">Parear com outro aparelho</button>' : ""}
       ${COPIAS.n ? `<button class="btn ghost onb-copias" data-act="copias">Recuperar uma cópia automática</button>` : ""}
       <input type="file" id="imp-json" accept=".json,application/json" class="sr" tabindex="-1" aria-hidden="true">
       <div class="hint onb-nota">${S.modo === "local" ? (nativoTauri() ? "Os dados ficam neste computador, num banco cifrado." : "Os dados ficam guardados neste navegador.") : "Os dados ficam salvos na sua conta claude.ai."}</div>

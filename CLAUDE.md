@@ -21,7 +21,7 @@ src-tauri/               casca Tauri: janela, chave no chaveiro, comandos invoke
 tools/tauri_prep.py      copia index.html + assets para dist/tauri/ (troca Google Fonts por assets/fonts/)
 test/desktop.py          testa o app desktop pela interface; roteiros em test/desktop/*.js
 test/ui/, test/*.py      testes da versão web (Playwright, não instalado nesta máquina)
-docs/                    especificacao.md, desktop-tauri.md, sincronizacao.md, bucket-s3.md
+docs/                    especificacao.md, desktop-tauri.md, sincronizacao.md, bucket-s3.md, android.md (plano)
 ```
 
 ## Comandos

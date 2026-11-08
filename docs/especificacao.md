@@ -8,7 +8,7 @@ v1.1 · 11/10/2026 · antes chamado Livro Caixa · substitui a abordagem por pla
 
 - App web publicado no claude.ai; abre no PC e no celular. Inspirado no Organizze.
 - Prioridade: lançar rápido em janelas. Uma janela única com 4 abas: Despesa, Receita, Cartão, Transferência.
-- Começa vazio. Apresentação (tela cheia, sem barra lateral): as 3 peças do logo se montam no centro (~1 s), o logo sobe, aparece o texto e, ~2,3 s depois, as opções Adicionar conta (abre o formulário: nome, tipo, saldo, categorias padrão; Voltar) e Restaurar um backup. Clique ou tecla pula a animação; com movimento reduzido tudo aparece de uma vez.
+- Começa vazio. Apresentação (tela cheia, sem barra lateral): as 3 peças do logo se montam no centro (~1 s), o logo sobe, aparece o texto e, ~2,3 s depois, as opções Adicionar conta (abre o formulário: nome, tipo, saldo, categorias padrão; Voltar), Restaurar um backup e, no app desktop, Parear com outro aparelho (janela com o passo a passo para gerar o código de pareamento no aparelho que já tem os dados e um campo para colá-lo; ao parear, o app recarrega com os dados do cofre). Clique ou tecla pula a animação; com movimento reduzido tudo aparece de uma vez.
 - Dados privados do usuário em `data/users/<id>/livro` (config) e `data/users/<id>/livro/l<ano>/<id>` (lançamentos, uma coleção por ano).
 - Valores em centavos (inteiros). Datas `AAAA-MM-DD`, meses `AAAA-MM`.
 
