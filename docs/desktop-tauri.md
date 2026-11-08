@@ -31,3 +31,14 @@ cargo test -p fintrix-core        # testes do armazenamento cifrado
 cargo install tauri-cli --version "^2"
 cargo tauri dev                   # abre o app
 ```
+
+## Gerar os pacotes para Linux
+
+```
+cargo install tauri-cli --version "^2" --locked   # uma vez
+cargo tauri build --bundles appimage,deb
+```
+
+Saída em `target/release/bundle/` (`appimage/FinTrix_<versão>_amd64.AppImage` e `deb/FinTrix_<versão>_amd64.deb`). O AppImage roda em qualquer distribuição (no Arch/CachyOS é o indicado); o .deb é para Debian/Ubuntu e declara `libwebkit2gtk-4.1-0` e `libgtk-3-0` como dependências. Para gerar o AppImage, o Tauri baixa o linuxdeploy do GitHub na primeira vez.
+
+O identificador `br.com.fintrix.app` gera um aviso (no macOS conflita com a extensão `.app`). Trocar muda a pasta de dados, então é melhor decidir antes do primeiro uso de verdade.
