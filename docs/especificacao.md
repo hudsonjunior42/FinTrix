@@ -90,6 +90,8 @@ O mesmo app do desktop (Tauri) no celular; plano e andamento em [android.md](and
 - Comprovante em PDF: o visualizador não mostra o PDF; o botão Abrir entrega o arquivo ao leitor de PDF do celular.
 - Sincronização só por bucket S3: "Ligar" mostra só o bucket e um código de cofre em pasta é recusado com explicação. Sincroniza também ao voltar para o app.
 - Pareamento: "Parear com outro aparelho"/"Entrar num cofre" tem **Ler QR code** (câmera), que lê o QR da janela "Código de pareamento" do outro aparelho e já pareia.
+- Botão voltar do Android: fecha o que estiver aberto, um de cada vez (visualizador, menu, janela, seleção), depois volta ao Início; no Início, sai do app.
+- Textos dizem "celular" no lugar de "computador"; sem o painel de atalhos de teclado. Os ícones das barras do sistema acompanham o tema do app.
 
 ## Verificação
 

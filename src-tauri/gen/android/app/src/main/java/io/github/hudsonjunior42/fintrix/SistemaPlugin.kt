@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowCompat
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
@@ -17,13 +18,34 @@ class AbrirArgs {
     var tipo: String? = null
 }
 
-/**
- * Abre um arquivo no app do sistema (PDF de comprovante, que a WebView não mostra). O Rust grava a cópia em
- * cache/abrir/ (abrir_arquivo em lib.rs) e aqui ela vai por FileProvider, com permissão só de leitura e só
- * para o app escolhido.
- */
+@InvokeArg
+class BarrasArgs {
+    var claro: Boolean = false
+}
+
+/** O que o app precisa do Android além da WebView. Só o Rust chama (mod sistema em lib.rs). */
 @TauriPlugin
-class ArquivosPlugin(private val activity: Activity) : Plugin(activity) {
+class SistemaPlugin(private val activity: Activity) : Plugin(activity) {
+    /**
+     * Ícones da barra de status e da de navegação escuros (tema claro do app) ou claros (tema escuro): o app
+     * desenha atrás das barras, e o Android escolhe pelo tema do sistema, que pode ser outro.
+     */
+    @Command
+    fun barras(invoke: Invoke) {
+        val args = invoke.parseArgs(BarrasArgs::class.java)
+        activity.runOnUiThread {
+            val c = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+            c.isAppearanceLightStatusBars = args.claro
+            c.isAppearanceLightNavigationBars = args.claro
+        }
+        invoke.resolve()
+    }
+
+    /**
+     * Abre um arquivo no app do sistema (PDF de comprovante, que a WebView não mostra). O Rust grava a cópia em
+     * cache/abrir/ (abrir_arquivo em lib.rs) e aqui ela vai por FileProvider, com permissão só de leitura e só
+     * para o app escolhido.
+     */
     @Command
     fun abrir(invoke: Invoke) {
         try {

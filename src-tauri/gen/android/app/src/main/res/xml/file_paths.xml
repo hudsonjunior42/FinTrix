@@ -3,6 +3,6 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
   <!-- fotos tiradas pela câmera no "Anexar foto" (RustWebChromeClient do wry) -->
   <external-files-path name="fotos" path="Pictures/" />
-  <!-- comprovantes abertos no app do sistema (ArquivosPlugin) -->
+  <!-- comprovantes abertos no app do sistema (SistemaPlugin) -->
   <cache-path name="abrir" path="abrir/" />
 </paths>

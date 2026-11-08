@@ -394,7 +394,7 @@ async fn abrir_arquivo(app: AppHandle, request: Request<'_>) -> Result<(), Strin
     }
     let caminho = pasta.join(nome_seguro(&meta));
     fs::write(&caminho, dados).map_err(texto)?;
-    arquivos::abrir(&caminho, meta["tipo"].as_str())
+    sistema::abrir(&caminho, meta["tipo"].as_str())
 }
 
 /// No desktop o visualizador mostra o PDF na própria janela.
@@ -404,9 +404,24 @@ async fn abrir_arquivo() -> Result<(), String> {
     Err("só no celular".into())
 }
 
-/// Celular: abre arquivos no app do sistema (ArquivosPlugin.kt em gen/android). Chamado só daqui.
+/// Celular: cor dos ícones das barras do sistema conforme o tema do app (claro = ícones escuros).
 #[cfg(mobile)]
-mod arquivos {
+#[tauri::command]
+fn barras(claro: bool) -> Result<(), String> {
+    sistema::barras(claro)
+}
+
+/// No desktop a janela tem a moldura do sistema.
+#[cfg(desktop)]
+#[tauri::command]
+fn barras(claro: bool) -> Result<(), String> {
+    let _ = claro;
+    Ok(())
+}
+
+/// Celular: o que o app precisa do Android além da WebView (SistemaPlugin.kt em gen/android). Chamado só daqui.
+#[cfg(mobile)]
+mod sistema {
     use std::path::Path;
     use std::sync::OnceLock;
 
@@ -417,18 +432,26 @@ mod arquivos {
     static ALCA: OnceLock<PluginHandle<Wry>> = OnceLock::new();
 
     pub fn plugin() -> TauriPlugin<Wry> {
-        Builder::new("arquivos")
+        Builder::new("sistema")
             .setup(|_app, _api| {
                 #[cfg(target_os = "android")]
-                let _ = ALCA.set(_api.register_android_plugin("io.github.hudsonjunior42.fintrix", "ArquivosPlugin")?);
+                let _ = ALCA.set(_api.register_android_plugin("io.github.hudsonjunior42.fintrix", "SistemaPlugin")?);
                 Ok(())
             })
             .build()
     }
 
-    pub fn abrir(caminho: &Path, tipo: Option<&str>) -> Result<(), String> {
+    fn chamar(comando: &str, args: Value) -> Result<(), String> {
         let alca = ALCA.get().ok_or("o app ainda não terminou de abrir")?;
-        alca.run_mobile_plugin::<Value>("abrir", json!({ "caminho": caminho, "tipo": tipo })).map(|_| ()).map_err(|e| e.to_string())
+        alca.run_mobile_plugin::<Value>(comando, args).map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    pub fn abrir(caminho: &Path, tipo: Option<&str>) -> Result<(), String> {
+        chamar("abrir", json!({ "caminho": caminho, "tipo": tipo }))
+    }
+
+    pub fn barras(claro: bool) -> Result<(), String> {
+        chamar("barras", json!({ "claro": claro }))
     }
 }
 
@@ -631,7 +654,7 @@ pub fn run() {
     let construtor = tauri::Builder::default().plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_fs::init());
     // antes do setup: abrir_banco já lê a chave por ele
     #[cfg(mobile)]
-    let construtor = construtor.plugin(chaveiro::plugin()).plugin(arquivos::plugin()).plugin(tauri_plugin_barcode_scanner::init());
+    let construtor = construtor.plugin(chaveiro::plugin()).plugin(sistema::plugin()).plugin(tauri_plugin_barcode_scanner::init());
     construtor
         .setup(|app| {
             let dir = pasta_de_dados(app.handle())?;
@@ -694,6 +717,7 @@ pub fn run() {
             loja_limpar,
             salvar_arquivo,
             abrir_arquivo,
+            barras,
             sync_estado,
             sync_agora,
             sync_criar,

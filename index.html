@@ -704,6 +704,7 @@ function aplicarTema(t, guardar) {
   document.documentElement.dataset.tema = t;
   if (guardar) lsSet("tema", t);
   const tc = document.querySelector('meta[name="theme-color"]'); if (tc) tc.content = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#0E1117";
+  barrasTauri();
   return t;
 }
 const temaAtual = () => document.documentElement.dataset.tema || "escuro";
@@ -1180,7 +1181,7 @@ async function abrirCopias() {
   let lista = [];
   try { lista = await listarCopias(); } catch (e) { console.error(e); }
   abrirJanela(`<div class="mhead"><h3>Cópias automáticas</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>
-    <div class="mbody"><div class="hint">Antes de restaurar um backup, atualizar o formato dos dados ou apagar tudo, o app guarda uma cópia ${aqui()}. Ficam as ${COPIAS_MAX} mais recentes. Elas não protegem contra ${nativoTauri() ? "perder o computador" : "limpar os dados do navegador"}: para isso existe o backup em arquivo.</div>
+    <div class="mbody"><div class="hint">Antes de restaurar um backup, atualizar o formato dos dados ou apagar tudo, o app guarda uma cópia ${aqui()}. Ficam as ${COPIAS_MAX} mais recentes. Elas não protegem contra ${nativoTauri() ? `perder o ${aparelho()}` : "limpar os dados do navegador"}: para isso existe o backup em arquivo.</div>
       <div class="list">${lista.map(c => `<div class="li"><div class="grow"><div class="t1">${esc(c.motivo)}</div><div class="t2">${esc(dataHora(c.quando))} · ${plural(c.n, "lançamento", "lançamentos")} · ${tamTxt(c.tam)}</div></div>
         <button class="btn sm" data-act="copia-baixar" data-id="${c.id}">${tx("Baixar", "Salvar")}</button><button class="btn sm" data-act="copia-restaurar" data-id="${c.id}">Restaurar</button></div>`).join("") || '<div class="empty">Nenhuma cópia guardada ainda.</div>'}</div></div>
     <div class="mfoot"><span class="sp"></span><button class="btn" data-act="fechar">Fechar</button></div>`, "sm");
@@ -1444,13 +1445,15 @@ function downloadsTauri() {
 function renderSemChave(el) {
   const e = S.chave || {};
   if (e.motivo === "sem-chaveiro" && !e.existe) {
-    el.innerHTML = `<div class="state"><b>O FinTrix precisa do chaveiro do sistema</b>A chave do banco cifrado fica no chaveiro (gnome-keyring ou KWallet). Instale ou desbloqueie um deles e abra o app de novo.
+    el.innerHTML = celular() ? `<div class="state"><b>O FinTrix não conseguiu usar o chaveiro do celular</b>A chave do banco cifrado fica guardada pelo Android. Feche e abra o app de novo; se continuar, reinicie o celular.
+      <div class="state-acoes"><button class="btn pri" data-act="recarregar">Tentar de novo</button></div></div>` : `<div class="state"><b>O FinTrix precisa do chaveiro do sistema</b>A chave do banco cifrado fica no chaveiro (gnome-keyring ou KWallet). Instale ou desbloqueie um deles e abra o app de novo.
       <div class="state-acoes"><button class="btn pri" data-act="recarregar">Tentar de novo</button></div></div>`;
     return;
   }
   const [titulo, txt] = e.motivo === "chave-incorreta" ? ["A chave guardada não abre este banco", "O chaveiro tem uma chave diferente da que cifrou os dados. Digite a chave de recuperação que você anotou."]
     : e.motivo === "sem-chaveiro" ? ["O chaveiro do sistema não respondeu", "Desbloqueie o chaveiro e tente de novo, ou digite a chave de recuperação para abrir só desta vez."]
-    : ["Informe a chave de recuperação", "Os dados deste computador estão cifrados, e a chave não está no chaveiro do sistema (sistema reinstalado ou outro usuário, por exemplo). Digite a chave que você anotou."];
+    : ["Informe a chave de recuperação", celular() ? "Os dados deste celular estão cifrados, e a chave não está guardada nele (app reinstalado ou dados do app apagados, por exemplo). Digite a chave que você anotou."
+      : "Os dados deste computador estão cifrados, e a chave não está no chaveiro do sistema (sistema reinstalado ou outro usuário, por exemplo). Digite a chave que você anotou."];
   el.innerHTML = `<div class="state"><b>${titulo}</b>${txt}
     <form id="f-chave" style="margin-top:14px;display:grid;gap:8px;max-width:520px;text-align:left">
       <label for="ch-in" class="flab">Chave de recuperação</label>
@@ -1465,7 +1468,7 @@ async function abrirComChave() {
   btn.disabled = true; msg.textContent = "Abrindo…";
   try {
     const r = await window.__TAURI__.core.invoke("informar_chave", { chave: $("#ch-in").value });
-    msg.textContent = r.salvo ? "Pronto." : "Aberto, mas o chaveiro não guardou a chave: ela será pedida de novo na próxima abertura.";
+    msg.textContent = r.salvo ? "Pronto." : `Aberto, mas o ${celular() ? "celular" : "chaveiro"} não guardou a chave: ela será pedida de novo na próxima abertura.`;
     setTimeout(() => location.reload(), r.salvo ? 200 : 2500);
   } catch (e) { msg.innerHTML = `<span class="neg">${esc(String(e))}</span>`; btn.disabled = false; }
 }
@@ -1483,6 +1486,12 @@ async function verChave() {
 /* ---------- sincronização entre aparelhos (app desktop): o Rust faz tudo (fintrix_core::sync); aqui só a tela.
    Os documentos que chegam de outros aparelhos entram pelo persistTauri().ouvir, como se fossem gravações locais. */
 const invT = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
+// app Android: ícones das barras do sistema escuros no tema claro do app e claros no escuro
+function barrasTauri() {
+  if (!celular()) return;
+  const t = temaAtual(), claro = t === "claro" || (t === "auto" && matchMedia("(prefers-color-scheme: light)").matches);
+  invT("barras", { claro }).catch(() => {});
+}
 function iniciarSync() {
   S.sync = S.sync || { ligado: false };
   window.__TAURI__.event.listen("sync-estado", ev => {
@@ -1585,7 +1594,7 @@ async function syncMostrarCodigo(codigo, enviando) {
 }
 async function syncCopiar() {
   const t = $("#sy-cod"); if (!t) return;
-  try { await navigator.clipboard.writeText(t.value); toast("Código copiado"); } catch { t.select(); toast("Selecionado: use Ctrl+C"); }
+  try { await navigator.clipboard.writeText(t.value); toast("Código copiado"); } catch { t.select(); toast(celular() ? "Selecionado: toque e segure para copiar" : "Selecionado: use Ctrl+C"); }
 }
 function abrirSyncEntrar() {
   // sem S.cfg é a apresentação de um aparelho novo: o texto explica o pareamento do começo
@@ -1644,7 +1653,7 @@ async function syncAgora() {
   } catch (e) { msgDados(String(e)); }
 }
 async function syncDesligar() {
-  try { S.sync = await invT("sync_desligar"); render(); toast("Sincronização desligada neste computador. Os dados continuam aqui e no cofre."); }
+  try { S.sync = await invT("sync_desligar"); render(); toast(`Sincronização desligada ${aqui()}. Os dados continuam aqui e no cofre.`); }
   catch (e) { toast(String(e)); }
 }
 
@@ -1968,7 +1977,7 @@ function vGeral() {
   <div class="grid g32">
     <section class="panel">
       ${grafCab("geral", "Gastos por categoria", totDesp)}
-      ${porCat.length ? catGraf("geral", porCat, totDesp) : `<div class="empty"><b>Sem despesas em ${mesLongo(M)}</b>Use o botão Novo ou a tecla D para lançar uma despesa.</div>`}
+      ${porCat.length ? catGraf("geral", porCat, totDesp) : `<div class="empty"><b>Sem despesas em ${mesLongo(M)}</b>Use o botão Novo${celular() ? "" : " ou a tecla D"} para lançar uma despesa.</div>`}
     </section>
     <section class="panel">
       <div class="panel-h"><h2>Cartões</h2><button class="btn sm" data-act="novo" data-tipo="cartao">Nova compra</button></div>
@@ -2547,7 +2556,7 @@ function vConfig() {
         <div class="tagpick">${tagsAll(true).map(([id, t]) => `<button data-act="tag-editar" data-id="${id}" style="${t.arq ? "opacity:.5" : ""}">#${esc(t.nome)}</button>`).join("") || '<span class="hint">Tags marcam gastos que cruzam categorias, como uma viagem.</span>'}</div></section>
       <section class="panel"><div class="panel-h"><h2>Fixas cadastradas</h2></div>${fixasLista()}</section>
       ${blocoDados()}
-      <section class="panel"><div class="panel-h"><h2>Atalhos de teclado</h2></div>
+      <section class="panel"${celular() ? " hidden" : ""}><div class="panel-h"><h2>Atalhos de teclado</h2></div>
         <div class="hint" style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px"><span class="kbd">D</span>Nova despesa<span class="kbd">R</span>Nova receita<span class="kbd">C</span>Compra no cartão<span class="kbd">T</span>Transferência<span class="kbd">← →</span>Mês anterior / próximo<span class="kbd">Enter</span>Salvar a janela<span class="kbd">Shift+Enter</span>Salvar e lançar outro<span class="kbd">Esc</span>Fechar a janela</div></section>
       ${blocoSobre()}
     </div></div>`;
@@ -2564,14 +2573,15 @@ function blocoDados() {
     else pasta = li("Backup automático", `Pasta <b>${esc(BK.pasta.name)}</b> · ${BK.perm !== "granted" ? '<span class="warn">pausado: falta permitir o acesso</span>' : BK.erro ? '<span class="warn">o último falhou</span>' : `ligado, um arquivo por dia (últimos ${BK_MANTER} dias)`}`,
       `${BK.perm !== "granted" ? '<button class="btn sm pri" data-act="bk-permitir">Permitir</button>' : '<button class="btn sm" data-act="bk-agora">Gravar agora</button>'}<button class="btn sm" data-act="bk-pasta">Trocar</button><button class="btn sm ghost" data-act="bk-desligar">Desligar</button>`);
   }
-  const prot = nativoTauri() ? li("Chave de recuperação", "Os dados ficam num banco cifrado. A chave fica no chaveiro do sistema; anote-a para abrir o banco se o chaveiro se perder (reinstalar o sistema, trocar de usuário).", '<button class="btn sm" data-act="chave-ver">Mostrar</button>')
+  const prot = nativoTauri() ? li("Chave de recuperação", celular() ? "Os dados ficam num banco cifrado. A chave fica guardada pelo Android neste celular; anote-a para abrir o banco se ela se perder (app reinstalado, dados do app apagados, celular trocado)."
+      : "Os dados ficam num banco cifrado. A chave fica no chaveiro do sistema; anote-a para abrir o banco se o chaveiro se perder (reinstalar o sistema, trocar de usuário).", '<button class="btn sm" data-act="chave-ver">Mostrar</button>')
     : local ? li("Proteção contra limpeza automática", `${PERSIST.ok ? "Ativa: o navegador não apaga os dados sozinho para liberar espaço." : "Não concedida: com pouco espaço em disco, o navegador pode apagar os dados. Instalar o app ou adicioná-lo aos favoritos costuma liberar."}${PERSIST.uso != null ? ` Uso atual: ${tamTxt(PERSIST.uso)}.` : ""}`, PERSIST.ok ? "" : '<button class="btn sm" data-act="persistir">Pedir de novo</button>') : "";
   const copias = S.sisOk ? li(`Cópias automáticas ${aqui()}`, COPIAS.n ? `${COPIAS.n} guardada${COPIAS.n === 1 ? "" : "s"}. A mais recente: ${esc(COPIAS.ult.motivo.charAt(0).toLowerCase() + COPIAS.ult.motivo.slice(1))}, ${esc(dataHora(COPIAS.ult.quando))}.` : "Nenhuma ainda. O app guarda uma antes de restaurar um backup, atualizar o formato dos dados ou apagar tudo.", COPIAS.n ? '<button class="btn sm" data-act="copias">Ver</button>' : "") : "";
   return `<section class="panel"><div class="panel-h"><h2>Seus dados</h2></div>
         <div class="list dados-st">${li("Último backup", ult)}${blocoSync(li)}${pasta}${prot}${copias}${blocoAnexos()}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" data-act="importar">Importar extrato ou fatura</button><button class="btn" data-act="exp-csv">Exportar planilha (CSV)</button><button class="btn" data-act="exp-json">${tx("Baixar backup", "Salvar backup")}</button>
         <label class="btn" for="imp-json" style="cursor:pointer">Restaurar backup</label><input type="file" id="imp-json" accept=".json,application/json" class="sr"></div>
-        <div class="hint" style="margin-top:8px">${local ? (nativoTauri() ? "Os dados ficam só neste computador, num banco cifrado." : "Os dados ficam só neste navegador, neste aparelho.") : "Os dados ficam na sua conta claude.ai."} O CSV abre no OnlyOffice e no Excel (separador ponto e vírgula).</div>
+        <div class="hint" style="margin-top:8px">${local ? (nativoTauri() ? `Os dados ficam só ${aqui()}, num banco cifrado.` : "Os dados ficam só neste navegador, neste aparelho.") : "Os dados ficam na sua conta claude.ai."} O CSV abre no OnlyOffice e no Excel (separador ponto e vírgula).</div>
         <div id="dados-msg" class="hint" style="margin-top:6px"></div>
         <div style="margin-top:14px"><button class="btn danger sm" data-act="apagar-tudo">Apagar todos os dados</button></div></section>`;
 }
@@ -2580,8 +2590,8 @@ function blocoSobre() {
   return `<section class="panel"><div class="panel-h"><h2>Sobre</h2></div>
         <div class="sobre"><span>Versão</span><b>FinTrix ${esc(APP_VERSAO)}${build ? ` · build <span class="num">${esc(build)}</span>` : ""}</b>
           <span>Formato dos dados</span><b>v${VERSAO_DADOS}</b>
-          <span>Onde ficam</span><b>${local ? (nativoTauri() ? "neste computador · banco cifrado" : `neste navegador${host ? ` · ${esc(host)}` : ""}`) : "na sua conta claude.ai"}</b></div>
-        ${local && nativoTauri() ? `<div class="hint" style="margin-top:10px">Cada computador e cada usuário do sistema guarda os seus próprios dados: o FinTrix aberto em outro computador, no outro sistema de um dual boot, na versão web ou no celular começa vazio. Para levar os dados, use o backup.</div>` : ""}
+          <span>Onde ficam</span><b>${local ? (nativoTauri() ? `${aqui()} · banco cifrado` : `neste navegador${host ? ` · ${esc(host)}` : ""}`) : "na sua conta claude.ai"}</b></div>
+        ${local && nativoTauri() ? `<div class="hint" style="margin-top:10px">${celular() ? "Cada aparelho guarda os seus próprios dados: o FinTrix no computador ou na versão web começa vazio. Para levar os dados, use a sincronização ou o backup." : "Cada computador e cada usuário do sistema guarda os seus próprios dados: o FinTrix aberto em outro computador, no outro sistema de um dual boot, na versão web ou no celular começa vazio. Para levar os dados, use a sincronização ou o backup."}</div>` : ""}
         ${local && !nativoTauri() ? `<div class="hint" style="margin-top:10px">Cada navegador, sistema operacional e aparelho guarda os seus próprios dados: o FinTrix aberto em outro navegador, no outro sistema de um dual boot ou no celular começa vazio. Abra sempre pelo mesmo endereço${host ? ` (${esc(host)})` : ""}: outra porta, ou 127.0.0.1 no lugar de localhost, também é outro banco de dados.</div>` : ""}</section>`;
 }
 const ordCat = (a, b) => (a[1].ordem || 0) - (b[1].ordem || 0) || a[1].nome.localeCompare(b[1].nome, "pt-BR");
@@ -2944,6 +2954,34 @@ async function abrirAnexoNoApp(id) {
   try { await window.__TAURI__.core.invoke("abrir_arquivo", await corpoArquivo({ nome: r.nome, tipo: r.tipo }, r.blob)); } catch (e) { toast(String(e)); }
 }
 // Esc fecha o visualizador antes da janela de baixo
+/* ---------- botão voltar do Android: fecha o que estiver aberto, um de cada vez (como o Esc); fora do Início, volta
+   ao Início; no Início, sai do app. O Tauri entrega o voltar ao histórico da WebView e, sem histórico, fecha o app:
+   enquanto houver algo para fechar, fica uma entrada extra no histórico, e o popstate faz o passo. */
+const VOLTAR = { ignorar: false, t: 0 };
+const temVoltar = () => !!($("#anx-view") || $("#menu") || janelaAberta() || S.selModo || (S.fase === "pronto" && S.view !== "geral"));
+function voltarUmPasso() {
+  if ($("#anx-view")) fecharAnexo();
+  else if ($("#menu")) fecharMenu();
+  else if (janelaAberta()) fecharJanela();
+  else if (S.selModo) sairSelecao();
+  else if (S.fase === "pronto" && S.view !== "geral") irPara("geral");
+}
+function acertarVoltar() {
+  if (!celular()) return;
+  const tem = temVoltar(), marcado = history.state?.fintrix === "voltar";
+  if (tem && !marcado) history.pushState({ fintrix: "voltar" }, "");
+  else if (!tem && marcado) { VOLTAR.ignorar = true; history.back(); } // fechou pela tela: tira a entrada extra
+}
+window.addEventListener("popstate", () => {
+  if (!celular()) return;
+  if (VOLTAR.ignorar) { VOLTAR.ignorar = false; return; }
+  voltarUmPasso(); setTimeout(acertarVoltar, 0);
+});
+// janelas, menus e telas mudam por muitos caminhos: confere depois de cada mudança no DOM
+new MutationObserver(() => { if (!celular()) return; clearTimeout(VOLTAR.t); VOLTAR.t = setTimeout(acertarVoltar, 60); })
+  .observe(document.body, { childList: true, subtree: true });
+barrasTauri();
+matchMedia("(prefers-color-scheme: light)").addEventListener("change", barrasTauri);
 document.addEventListener("keydown", ev => { if (ev.key === "Escape" && $("#anx-view")) { ev.stopImmediatePropagation(); ev.preventDefault(); fecharAnexo(); } }, true);
 
 // resumo para Configurações (calculado em segundo plano)

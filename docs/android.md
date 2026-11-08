@@ -40,7 +40,7 @@ Primeiro marco: `cargo build -p fintrix-core --target aarch64-linux-android` e `
 - **Salvar arquivo** (feito; `salvar_arquivo`: backup, CSV, comprovantes, .zip): o `tauri-plugin-dialog` abre o "Salvar como" do sistema, que no Android devolve um `content://`; a gravação vai pelo `tauri-plugin-fs` (`app.fs().open`), que abre caminho no desktop e `content://` no Android. A interface não tem permissão do plugin fs (só `core:default`).
 - **Bytes pelo IPC** (feito): no Android o `invoke` vai por postMessage em JSON, e um `Uint8Array` chega ao Rust como lista de números; `bytes_do_pedido` aceita os dois formatos. Na volta (`loja_bytes`) o Tauri já entrega `ArrayBuffer`. Custo: gravar um comprovante de 3 MB leva ~4 s no celular (o JSON é grande); se incomodar, mandar em base64 ou em partes.
 - **Abrir arquivo** (restaurar backup, importar extrato, anexar comprovante): o `<input type="file">` da WebView do Android abre o seletor do sistema (o wry trata `onShowFileChooser`; com `capture` oferece a câmera). Só abre com toque de verdade: `click()` vindo do DevTools não abre.
-- **Ver PDF** (feito): a WebView do Android não mostra PDF em `<iframe>` (fica em branco). No celular o visualizador de comprovante mostra **Abrir**, que grava uma cópia em `cache/abrir/` (`abrir_arquivo`, apagada depois de 1 h) e entrega ao leitor do sistema por `FileProvider` (`ArquivosPlugin.kt`), só com leitura. O `file_paths.xml` foi reduzido a essa pasta e à das fotos da câmera (o padrão do Tauri liberava todo o armazenamento).
+- **Ver PDF** (feito): a WebView do Android não mostra PDF em `<iframe>` (fica em branco). No celular o visualizador de comprovante mostra **Abrir**, que grava uma cópia em `cache/abrir/` (`abrir_arquivo`, apagada depois de 1 h) e entrega ao leitor do sistema por `FileProvider` (`SistemaPlugin.kt`), só com leitura. O `file_paths.xml` foi reduzido a essa pasta e à das fotos da câmera (o padrão do Tauri liberava todo o armazenamento).
 - **Permissões**: só `INTERNET` (para o S3). Nada de armazenamento externo.
 
 ## 3. Sincronização no celular
@@ -54,11 +54,11 @@ Primeiro marco: `cargo build -p fintrix-core --target aarch64-linux-android` e `
 
 ## 4. Interface (`index.html`)
 
-- `nativoTauri()` continua valendo; acrescentar `celular()` (Android) para os poucos textos diferentes: "neste celular" em `aqui()`, e esconder "Escolher…" da pasta se a opção (b) do item 3 for a escolhida.
+- **Textos** (feito): `celular()` e `aparelho()` ("celular"/"computador"); `aqui()` diz "neste celular". Chave de recuperação, tela sem chave, sincronização e "Seus dados" falam do celular; o painel "Atalhos de teclado" fica escondido e o vazio da Visão geral não cita a tecla D.
 - Teclas de atalho e arrastar arquivo não existem no celular: já são opcionais, nada quebra.
-- Áreas seguras (barra de status e de gestos): já feitas para o PWA (topo, barra de abas, botão flutuante, rodapé das janelas); só conferir no celular se a WebView do Tauri desenha atrás das barras (edge-to-edge) ou não.
-- Botão voltar do Android: fechar a janela aberta (modal) antes de sair do app.
-- Tema: a barra de status acompanha o tema claro/escuro (`theme-color`).
+- **Áreas seguras**: já feitas para o PWA (topo, barra de abas, botão flutuante, rodapé das janelas); no Android 13 a tela fica certa entre as barras. Falta conferir num Android 15+, onde o desenho atrás das barras é obrigatório.
+- **Botão voltar** (feito): o Tauri entrega o voltar ao histórico da WebView e, sem histórico, fecha o app. Enquanto houver algo aberto (visualizador de comprovante, menu, janela, seleção, ou uma tela que não é o Início), fica uma entrada extra no histórico (`acertarVoltar`, chamado por um `MutationObserver`); o `popstate` dá um passo, como o Esc (`voltarUmPasso`). No Início, o voltar sai do app.
+- **Barras do sistema** (feito): o app desenha atrás das barras (`enableEdgeToEdge`), e o Android escolhe a cor dos ícones pelo tema do sistema. `barrasTauri()` chama `barras` (Rust) → `SistemaPlugin.barras` (Kotlin) com ícones escuros no tema claro do app e claros no escuro; roda ao abrir, ao trocar o tema e quando o sistema muda no tema "Automático".
 
 ## 5. Testes
 
@@ -85,7 +85,8 @@ Primeiro marco: `cargo build -p fintrix-core --target aarch64-linux-android` e `
 - **Etapa 3 feita**: chave no Android Keystore (veja o item 2). Conferido no celular: app novo cria e guarda a chave; reabrir entra direto; sem a chave, o banco fica trancado, a chave errada é recusada e a de recuperação abre e volta a ser guardada. Ícone do FinTrix no lugar do padrão do Tauri; backup do Android desligado.
 - **Etapa 4 feita**: salvar pelo seletor do sistema (conferido: arquivo chegou em Downloads), comprovantes de 1 kB e 3 MB gravados e lidos sem diferença, PDF aberto no leitor do sistema. Falta conferir à mão o seletor do "Restaurar backup" e do "Anexar foto ou PDF" (precisa de toque de verdade).
 - **Etapa 5 feita**: no celular, a sincronização é só por bucket, sincroniza ao voltar para o app e pareia pelo QR code mostrado no computador. Conferido com `test/android_sync.py`: o celular leu o QR, recebeu conta, despesa e comprovante, lançou uma despesa que chegou ao PC; o cofre tem os dois aparelhos e nada em claro.
-- Próxima: etapa 6 (ajustes de interface: botão voltar, textos "computador"/"navegador", áreas seguras).
+- **Etapa 6 feita**: voltar do Android, textos do celular e cor dos ícones das barras. Conferido pelo DevTools (voltar fecha a janela, depois volta ao Início, e no Início não sobra entrada no histórico) e por foto da tela nos dois temas.
+- Próxima: etapa 7 (assinatura, APK de release, guia em `docs/android.md`).
 
 ### Como compilar e testar no celular
 
