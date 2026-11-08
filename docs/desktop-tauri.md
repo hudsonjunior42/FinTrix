@@ -1,6 +1,6 @@
 # App desktop (Tauri 2) — protótipo
 
-**Status: protótipo, testado no Linux (WebKitGTK).** `cargo test -p fintrix-core` (5 testes) e `python3 test/desktop.py` passam: pela interface, cria a conta, lança uma despesa, fecha, reabre com os dados vindos do SQLite cifrado, recusa a chave errada e nenhum arquivo da pasta do app tem os textos lançados em claro. Não testado no Windows, macOS nem Android.
+**Status: protótipo, testado no Linux (WebKitGTK).** `cargo test -p fintrix-core` (6 testes) e `python3 test/desktop.py` passam: pela interface, cria a conta, lança uma despesa com comprovante, guarda uma cópia automática, fecha, reabre com tudo vindo do SQLite cifrado (inclusive o .zip de comprovantes), recusa a chave errada e nenhum arquivo da pasta do app tem os textos lançados ou o conteúdo do comprovante em claro. Não testado no Windows, macOS nem Android.
 
 ## Teste pela interface
 
@@ -10,12 +10,13 @@
 
 - A interface é o mesmo `index.html`. Dentro do Tauri (`window.__TAURI__` presente), `Backends.local` usa `persistTauri()` em vez do IndexedDB: cada gravação vai por `invoke` para o Rust.
 - `crates/fintrix-core`: guarda os documentos (`caminho` → JSON) num SQLite cifrado com SQLCipher. Chave de 256 bits aleatória.
+- Comprovantes e cópias automáticas também vão para o SQLite cifrado (tabela `itens`, lojas `anexos` e `sistema/copias`): no app desktop, `anxTx` e `sisTx` usam `lojaTauri`, que imita o object store do IndexedDB. Os arquivos vão como bytes crus (`loja_gravar_bytes`, `loja_bytes`).
+- Dados de uma versão anterior deste protótipo que já estejam no IndexedDB da WebView não são migrados.
 - `src-tauri`: a casca. Guarda a chave no chaveiro do sistema (crate `keyring`); se o chaveiro não estiver disponível, o app não abre (a chave nunca vai para o disco em texto puro).
 - O banco fica em `app_data_dir()/fintrix.db` (no Linux, `~/.local/share/br.com.fintrix.app/`).
 
 ## O que ainda não está coberto
 
-- Comprovantes (anexos) e cópias automáticas (`guardarCopia`, feitas antes de restaurar, migrar ou apagar tudo) continuam no IndexedDB da WebView (`webview/` na pasta do app), **sem criptografia**. O teste não passa por esses caminhos; é a próxima coisa a mover para o SQLite.
 - Textos do app ainda dizem "neste navegador".
 - Fontes ainda vêm do Google Fonts (sem internet, usa as de reserva).
 - Sem senha de abertura, bloqueio por inatividade nem sincronização (fases seguintes do plano).

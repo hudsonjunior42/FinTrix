@@ -1,7 +1,7 @@
 """Testa o app desktop (Tauri) pela interface, com dados numa pasta temporária e sem tocar no chaveiro real.
 
-1. primeira abertura: cria conta e lança uma despesa (test/desktop/fase1.js)
-2. reabre: os dados voltam do SQLite cifrado (fase2.js)
+1. primeira abertura: cria conta, lança uma despesa com comprovante e guarda uma cópia automática (test/desktop/fase1.js)
+2. reabre: dados, comprovante e cópia voltam do SQLite cifrado (fase2.js)
 3. reabre com a chave errada: o app não abre
 4. nenhum arquivo da pasta de dados tem os textos lançados em claro
 
@@ -55,7 +55,7 @@ try:
 
     # nada do que foi digitado pode aparecer em claro em nenhum arquivo do app
     vazou = sorted(str(f.relative_to(dados)) for f in dados.rglob("*") if f.is_file()
-                   and any(t in f.read_bytes() for t in (b"Supermercado", b"Nubank")))
+                   and any(t in f.read_bytes() for t in (b"Supermercado", b"Nubank", b"COMPROVANTE-SEGREDO", b"recibo.pdf")))
     check("banco cifrado (cabeçalho)", (dados / "app/fintrix.db").read_bytes()[:15] == b"SQLite format 3", False)
     check("arquivos com dados em claro", vazou, [])
 finally:

@@ -32,6 +32,14 @@ pub struct Op {
     pub data: Option<Value>,
 }
 
+/// Um item de loja; `bytes` é o tamanho do arquivo guardado junto, se houver.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Item {
+    pub chave: Value,
+    pub valor: Value,
+    pub bytes: Option<i64>,
+}
+
 pub struct Store {
     conn: Mutex<Connection>,
 }
@@ -59,9 +67,112 @@ impl Store {
                  path TEXT PRIMARY KEY,
                  json TEXT NOT NULL,
                  atualizado_em INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+             );
+             -- o que no navegador fica em outros IndexedDB: cópias automáticas, preferências do sistema e comprovantes.
+             -- chave = JSON da chave (5 ou \"x1a2b\"); bytes = conteúdo do arquivo, quando houver
+             CREATE TABLE IF NOT EXISTS itens (
+                 loja TEXT NOT NULL,
+                 chave TEXT NOT NULL,
+                 valor TEXT NOT NULL,
+                 bytes BLOB,
+                 PRIMARY KEY (loja, chave)
              );",
         )?;
         Ok(Self { conn: Mutex::new(conn) })
+    }
+
+    fn com_conn<T>(&self, f: impl FnOnce(&Connection) -> Resultado<T>) -> Resultado<T> {
+        let conn = self.conn.lock().map_err(|_| Erro::Bloqueado)?;
+        f(&conn)
+    }
+
+    /// Itens de uma loja, sem o conteúdo dos arquivos (só o tamanho em `bytes`).
+    pub fn loja_todos(&self, loja: &str) -> Resultado<Vec<Item>> {
+        self.com_conn(|c| {
+            let mut st = c.prepare("SELECT chave, valor, length(bytes) FROM itens WHERE loja = ?1 ORDER BY chave")?;
+            let linhas = st.query_map(params![loja], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<i64>>(2)?)))?;
+            let mut out = Vec::new();
+            for l in linhas {
+                let (k, v, b) = l?;
+                out.push(Item { chave: serde_json::from_str(&k)?, valor: serde_json::from_str(&v)?, bytes: b });
+            }
+            Ok(out)
+        })
+    }
+
+    pub fn loja_get(&self, loja: &str, chave: &Value) -> Resultado<Option<Item>> {
+        let k = serde_json::to_string(chave)?;
+        self.com_conn(|c| {
+            let r = c.query_row(
+                "SELECT valor, length(bytes) FROM itens WHERE loja = ?1 AND chave = ?2",
+                params![loja, k],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?)),
+            );
+            match r {
+                Ok((v, b)) => Ok(Some(Item { chave: chave.clone(), valor: serde_json::from_str(&v)?, bytes: b })),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        })
+    }
+
+    pub fn loja_bytes(&self, loja: &str, chave: &Value) -> Resultado<Option<Vec<u8>>> {
+        let k = serde_json::to_string(chave)?;
+        self.com_conn(|c| {
+            match c.query_row("SELECT bytes FROM itens WHERE loja = ?1 AND chave = ?2", params![loja, k], |r| r.get::<_, Option<Vec<u8>>>(0)) {
+                Ok(b) => Ok(b),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        })
+    }
+
+    pub fn loja_gravar(&self, loja: &str, chave: &Value, valor: &Value, bytes: Option<&[u8]>) -> Resultado<()> {
+        let (k, v) = (serde_json::to_string(chave)?, serde_json::to_string(valor)?);
+        self.com_conn(|c| {
+            c.execute(
+                "INSERT INTO itens (loja, chave, valor, bytes) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(loja, chave) DO UPDATE SET valor = excluded.valor, bytes = excluded.bytes",
+                params![loja, k, v, bytes],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Como o `add` de um object store com `autoIncrement`: o id é o maior id numérico + 1 e vai também em `valor.id`.
+    pub fn loja_adicionar(&self, loja: &str, valor: &Value) -> Resultado<i64> {
+        let mut conn = self.conn.lock().map_err(|_| Erro::Bloqueado)?;
+        let tx = conn.transaction()?;
+        let id: i64 = tx.query_row(
+            "SELECT coalesce(max(CAST(chave AS INTEGER)), 0) + 1 FROM itens WHERE loja = ?1 AND chave GLOB '[0-9]*'",
+            params![loja],
+            |r| r.get(0),
+        )?;
+        let mut v = valor.clone();
+        if let Value::Object(m) = &mut v {
+            m.insert("id".into(), Value::from(id));
+        }
+        tx.execute(
+            "INSERT INTO itens (loja, chave, valor) VALUES (?1, ?2, ?3)",
+            params![loja, id.to_string(), serde_json::to_string(&v)?],
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    pub fn loja_apagar(&self, loja: &str, chave: &Value) -> Resultado<()> {
+        let k = serde_json::to_string(chave)?;
+        self.com_conn(|c| {
+            c.execute("DELETE FROM itens WHERE loja = ?1 AND chave = ?2", params![loja, k])?;
+            Ok(())
+        })
+    }
+
+    pub fn loja_limpar(&self, loja: &str) -> Resultado<()> {
+        self.com_conn(|c| {
+            c.execute("DELETE FROM itens WHERE loja = ?1", params![loja])?;
+            Ok(())
+        })
     }
 
     /// Todos os documentos, como `[caminho, dados]`.
@@ -158,6 +269,27 @@ mod testes {
         Store::abrir(&p, &k).unwrap().gravar("c", Some(&json!(1))).unwrap();
         let outra = gerar_chave().unwrap();
         assert!(matches!(Store::abrir(&p, &outra), Err(Erro::ChaveIncorreta)));
+    }
+
+    #[test]
+    fn lojas_com_autoincremento_e_bytes() {
+        let (_d, p, k) = novo();
+        let s = Store::abrir(&p, &k).unwrap();
+        assert_eq!(s.loja_adicionar("copias", &json!({"motivo": "a"})).unwrap(), 1);
+        assert_eq!(s.loja_adicionar("copias", &json!({"motivo": "b"})).unwrap(), 2);
+        assert_eq!(s.loja_get("copias", &json!(2)).unwrap().unwrap().valor, json!({"motivo": "b", "id": 2}));
+        s.loja_apagar("copias", &json!(1)).unwrap();
+        assert_eq!(s.loja_todos("copias").unwrap().len(), 1);
+
+        s.loja_gravar("anexos", &json!("x1"), &json!({"id": "x1", "tipo": "application/pdf"}), Some(b"%PDF-1.4")).unwrap();
+        let it = s.loja_get("anexos", &json!("x1")).unwrap().unwrap();
+        assert_eq!(it.bytes, Some(8));
+        assert_eq!(s.loja_bytes("anexos", &json!("x1")).unwrap().unwrap(), b"%PDF-1.4");
+        assert!(s.loja_get("anexos", &json!("x2")).unwrap().is_none());
+        s.loja_limpar("anexos").unwrap();
+        assert!(s.loja_todos("anexos").unwrap().is_empty());
+        // limpar uma loja não mexe nas outras
+        assert_eq!(s.loja_todos("copias").unwrap().len(), 1);
     }
 
     #[test]

@@ -926,6 +926,7 @@ function validarBackup(j) {
 /* ---------- armazenamento do sistema, neste navegador: pasta do backup automático e cópias de segurança internas */
 let _sis = null;
 function sisDb() {
+  if (nativoTauri()) return Promise.resolve(null); // no app desktop, sisTx vai para o SQLite cifrado
   if (!_sis) _sis = (async () => {
     if (!window.indexedDB) throw new Error("IndexedDB indisponível");
     const r = indexedDB.open("fintrix-sistema", 1);
@@ -935,6 +936,7 @@ function sisDb() {
   return _sis;
 }
 async function sisTx(store, modo, fn) {
+  if (nativoTauri()) return lojaTauri("sistema/" + store, fn);
   const db = await sisDb(), tx = db.transaction(store, modo);
   const fim = new Promise((ok, no) => { tx.oncomplete = ok; tx.onerror = () => no(tx.error); tx.onabort = () => no(tx.error); });
   const r = fn(tx.objectStore(store));
@@ -1276,6 +1278,40 @@ function persistTauri() {
   };
 }
 const nativoTauri = () => !!(window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === "function");
+// No app desktop, os outros IndexedDB (sistema: cópias automáticas; anexos: comprovantes) viram lojas do SQLite cifrado.
+// fn recebe uma imitação do objectStore; os pedidos rodam em ordem depois que fn volta, e o pedido devolvido por fn
+// traz o resultado, como em sisTx/anxTx. Arquivos (campo blob) vão como bytes crus; no getAll vêm sob demanda.
+async function lojaTauri(loja, fn) {
+  const inv = window.__TAURI__.core.invoke, fila = [];
+  const pedido = op => { const r = { _pedido: true, result: undefined }; fila.push([r, op]); return r; };
+  const bytes = chave => inv("loja_bytes", { loja, chave });
+  const st = {
+    get: chave => pedido(async () => {
+      const it = await inv("loja_get", { loja, chave }); if (!it) return undefined;
+      if (it.bytes != null) it.valor.blob = new Blob([await bytes(it.chave)], { type: it.valor.tipo || "" });
+      return it.valor;
+    }),
+    getAll: () => pedido(async () => (await inv("loja_todos", { loja })).map(it => {
+      if (it.bytes != null) it.valor.blob = { size: it.bytes, type: it.valor.tipo || "", arrayBuffer: () => bytes(it.chave) };
+      return it.valor;
+    })),
+    getAllKeys: () => pedido(async () => (await inv("loja_todos", { loja })).map(it => it.chave)),
+    put: (valor, chave = valor.id) => pedido(async () => {
+      if (!(valor.blob instanceof Blob)) return inv("loja_gravar", { loja, chave, valor });
+      const { blob, ...resto } = valor;
+      const meta = new TextEncoder().encode(JSON.stringify({ loja, chave, valor: resto })), arq = new Uint8Array(await blob.arrayBuffer());
+      const corpo = new Uint8Array(4 + meta.length + arq.length);
+      new DataView(corpo.buffer).setUint32(0, meta.length, true); corpo.set(meta, 4); corpo.set(arq, 4 + meta.length);
+      return inv("loja_gravar_bytes", corpo);
+    }),
+    add: valor => pedido(() => inv("loja_adicionar", { loja, valor })),
+    delete: chave => pedido(() => inv("loja_apagar", { loja, chave })),
+    clear: () => pedido(() => inv("loja_limpar", { loja })),
+  };
+  const r = fn(st);
+  for (const [p, op] of fila) p.result = await op();
+  return r && r._pedido ? r.result : r;
+}
 async function localDb(nome, persist) {
   if (!persist) persist = await persistIdb(nome);
   const cache = new Map();
@@ -2586,6 +2622,7 @@ function anexosDb() {
   return _anx;
 }
 async function anxTx(modo, fn) {
+  if (nativoTauri()) return lojaTauri("anexos", fn);
   const db = await anexosDb(), tx = db.transaction("arq", modo);
   const fim = new Promise((ok, no) => { tx.oncomplete = ok; tx.onerror = () => no(tx.error); tx.onabort = () => no(tx.error); });
   const r = fn(tx.objectStore("arq"));

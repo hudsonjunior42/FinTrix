@@ -4,8 +4,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use fintrix_core::{gerar_chave, Op, Store};
+use fintrix_core::{gerar_chave, Item, Op, Store};
 use serde_json::Value;
+use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
@@ -60,6 +61,61 @@ fn db_lote(store: State<Store>, ops: Vec<Op>) -> Result<(), String> {
     store.lote(&ops).map_err(|e| e.to_string())
 }
 
+// lojas: o que no navegador fica nos outros IndexedDB (cópias automáticas, comprovantes); veja lojaTauri em index.html
+#[tauri::command]
+fn loja_todos(store: State<Store>, loja: String) -> Result<Vec<Item>, String> {
+    store.loja_todos(&loja).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn loja_get(store: State<Store>, loja: String, chave: Value) -> Result<Option<Item>, String> {
+    store.loja_get(&loja, &chave).map_err(|e| e.to_string())
+}
+
+/// Conteúdo do arquivo, como bytes crus (ArrayBuffer no JS).
+#[tauri::command]
+fn loja_bytes(store: State<Store>, loja: String, chave: Value) -> Result<Response, String> {
+    match store.loja_bytes(&loja, &chave).map_err(|e| e.to_string())? {
+        Some(b) => Ok(Response::new(b)),
+        None => Err("arquivo não encontrado".into()),
+    }
+}
+
+#[tauri::command]
+fn loja_gravar(store: State<Store>, loja: String, chave: Value, valor: Value) -> Result<(), String> {
+    store.loja_gravar(&loja, &chave, &valor, None).map_err(|e| e.to_string())
+}
+
+/// Corpo cru: 4 bytes (u32 little-endian) com o tamanho do JSON { loja, chave, valor }, o JSON e depois o arquivo.
+#[tauri::command]
+fn loja_gravar_bytes(store: State<Store>, request: Request<'_>) -> Result<(), String> {
+    let InvokeBody::Raw(corpo) = request.body() else {
+        return Err("esperava bytes".into());
+    };
+    let n = corpo.get(..4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).ok_or("corpo curto")?;
+    let meta = corpo.get(4..4 + n).ok_or("corpo curto")?;
+    let meta: Value = serde_json::from_slice(meta).map_err(|e| e.to_string())?;
+    let (Some(loja), Some(chave), Some(valor)) = (meta["loja"].as_str(), meta.get("chave"), meta.get("valor")) else {
+        return Err("cabeçalho incompleto".into());
+    };
+    store.loja_gravar(loja, chave, valor, Some(&corpo[4 + n..])).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn loja_adicionar(store: State<Store>, loja: String, valor: Value) -> Result<i64, String> {
+    store.loja_adicionar(&loja, &valor).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn loja_apagar(store: State<Store>, loja: String, chave: Value) -> Result<(), String> {
+    store.loja_apagar(&loja, &chave).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn loja_limpar(store: State<Store>, loja: String) -> Result<(), String> {
+    store.loja_limpar(&loja).map_err(|e| e.to_string())
+}
+
 /// Fim de um roteiro de teste (FINTRIX_TESTE): imprime o relatório e fecha o app. Sem efeito em release.
 #[tauri::command]
 fn teste_fim(app: AppHandle, ok: bool, relatorio: String) {
@@ -102,7 +158,20 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![db_todos, db_gravar, db_lote, teste_fim])
+        .invoke_handler(tauri::generate_handler![
+            db_todos,
+            db_gravar,
+            db_lote,
+            loja_todos,
+            loja_get,
+            loja_bytes,
+            loja_gravar,
+            loja_gravar_bytes,
+            loja_adicionar,
+            loja_apagar,
+            loja_limpar,
+            teste_fim
+        ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar o FinTrix");
 }
