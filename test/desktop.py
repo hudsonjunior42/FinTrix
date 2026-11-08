@@ -70,6 +70,13 @@ try:
 
     abrir("sincronização: A liga", "sync-a1.js", dados, chave, chave)
     codigo = (saida / "codigo.txt").read_text() if (saida / "codigo.txt").exists() else ""
+    # o QR code da janela tem exatamente o código de pareamento (precisa de rsvg-convert e zbarimg)
+    if shutil.which("rsvg-convert") and shutil.which("zbarimg") and (saida / "qr.svg").exists():
+        subprocess.run(["rsvg-convert", "-w", "600", "-b", "white", "-o", str(saida / "qr.png"), str(saida / "qr.svg")], check=True)
+        lido = subprocess.run(["zbarimg", "--raw", "-q", str(saida / "qr.png")], capture_output=True, text=True).stdout.strip()
+        check("QR code decodificado = código de pareamento", lido == codigo and codigo.startswith("FTX1."), True)
+    else:
+        print("(QR code não decodificado: falta rsvg-convert/zbarimg ou o qr.svg)")
     chave_b = secrets.token_hex(32)
     abrir("sincronização: B entra e lança", "sync-b.js", tmp / "aparelho-b", chave_b, chave_b, extra=f" const CODIGO = {json.dumps(codigo)};")
     abrir("sincronização: A recebe", "sync-a2.js", dados, chave, chave)

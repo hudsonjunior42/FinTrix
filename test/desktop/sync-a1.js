@@ -20,6 +20,10 @@ T.rodar(async () => {
   const codigo = T.q("#sy-cod").value;
   T.check("código de pareamento", codigo.startsWith("FTX1."), true);
   await downloadsTauri().save({ filename: "codigo.txt", data: codigo });
+  // QR code do mesmo código, para o celular ler; o test/desktop.py decodifica e compara
+  await T.espera(() => T.q("#sy-qr svg"), "QR code", 10000);
+  T.check("QR code na janela do código", !!T.q("#sy-qr svg"), true);
+  await downloadsTauri().save({ filename: "qr.svg", data: T.q("#sy-qr").innerHTML });
   T.q('.modal [data-act="fechar"]').click();
   await T.espera(() => /Ligada/.test(T.q("#content").innerText), "status ligado");
   T.check("status na tela", /Ligada · pasta/.test(T.q("#content").innerText), true);
