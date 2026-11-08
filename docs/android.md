@@ -33,6 +33,7 @@ adb shell am start -n io.github.hudsonjunior42.fintrix.debug/io.github.hudsonjun
 
 cargo tauri android build --apk --target aarch64             # release assinado (~28 MB)
 cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk dist/android/FinTrix-<versão>.apk
+cp src-tauri/gen/android/app/build/outputs/mapping/universalRelease/mapping.txt dist/android/FinTrix-<versão>-mapping.txt
 ```
 
 - Só `aarch64` (todo celular atual). Para aparelhos antigos de 32 bits, acrescentar `--target armv7` (o APK cresce).
@@ -63,6 +64,8 @@ node test/android/avaliar.mjs 9333 'S.fase'      # avalia na página; aceita awa
 
   Ou `chrome://inspect` no Chrome do PC. Para zerar os dados de teste (o MIUI bloqueia `pm clear`): `adb shell "run-as io.github.hudsonjunior42.fintrix.debug rm -f fintrix.db fintrix.db-wal fintrix.db-shm no_backup/chave-do-banco.bin"`.
 - **Sincronização PC ↔ celular**: `python3 test/android_sync.py` sobe um S3 local (`test/s3_local.py`; http só no build de debug, o celular chega nele por `adb reverse`), abre o FinTrix de teste no PC com os dados de `fase1.js` e o QR code, e espera o celular ler o QR, receber tudo e lançar "Farmácia do celular" (R$ 45,00); depois confere o cofre (dois aparelhos, nada em claro).
+- **O release passa pelo R8** (encolhe e renomeia o código Java/Kotlin) e o debug não: o que funciona no FinTrix (teste) pode travar no release. Bibliotecas que acham classes por reflexão precisam de regras em `app/proguard-rules.pro`; o ML Kit do leitor de QR já tem (sem elas, o app fechava ao abrir a câmera). Para testar o R8 no app de teste, ligar por um momento no bloco `debug` do `app/build.gradle.kts` o mesmo `optimization { enable = true }` e `proguardFiles(...)` do release.
+- **Travamento no release**: `adb logcat -d -b crash` mostra o rastro com nomes trocados; `retrace dist/android/FinTrix-<versão>-mapping.txt rastro.txt` (das Command-line Tools, com o `java` do Android Studio no PATH) devolve os nomes de verdade. O log de travamento não tem dados do app.
 - O que só se testa à mão: botão voltar, seletores de arquivo ("Restaurar backup", "Anexar foto ou PDF": a WebView só abre com toque de verdade), câmera do QR.
 
 ## Como funciona no celular
@@ -81,6 +84,7 @@ node test/android/avaliar.mjs 9333 'S.fase'      # avalia na página; aceita awa
 - **Botão voltar**: o Tauri entrega o voltar ao histórico da WebView e, sem histórico, fecha o app. Enquanto houver algo aberto (visualizador, menu, janela, seleção, ou uma tela que não é o Início), fica uma entrada extra no histórico (`acertarVoltar`, chamado por um `MutationObserver`); o `popstate` dá um passo, como o Esc (`voltarUmPasso`).
 - **Barras do sistema**: o app desenha atrás das barras (`enableEdgeToEdge`); `barrasTauri()` → `barras` → `SistemaPlugin.barras` deixa os ícones escuros no tema claro do app e claros no escuro. O fundo da abertura segue o tema do sistema (`values*/fundo.xml`).
 - **Textos**: `celular()` e `aparelho()` na interface ("neste celular" em `aqui()`); sem o painel de atalhos de teclado.
+- **Leitor de QR no release**: o ML Kit (Google) acha os próprios componentes por reflexão; encolhido pelo R8, `InputImage.fromMediaImage` dava `NullPointerException` no primeiro quadro da câmera. `app/proguard-rules.pro` mantém `com.google.mlkit.**`, `com.google.android.gms.internal.mlkit_**` e `com.google.firebase.components.**`.
 - **Permissões**: `INTERNET` (S3) e `CAMERA` (QR code, pedida na hora). Nada de armazenamento externo.
 
 ## Pendências e ideias
