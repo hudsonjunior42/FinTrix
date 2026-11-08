@@ -5,7 +5,11 @@
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
+    <!-- sem backup automático (Google Drive, adb): os dados vão de um aparelho a outro pelo cofre
+         cifrado ou pelo backup do próprio FinTrix, nunca por uma cópia do banco feita pelo sistema -->
     <application
+        android:allowBackup="false"
+        android:fullBackupContent="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.fintrix"

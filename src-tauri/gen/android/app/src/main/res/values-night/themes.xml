@@ -1,6 +1,7 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
     <style name="Theme.fintrix" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your theme here. -->
+        <!-- fundo da abertura (e atrás da WebView) na cor do tema do app (variável bg do tema em index.html) -->
+        <item name="android:windowBackground">@color/fundo</item>
     </style>
 </resources>

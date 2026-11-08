@@ -87,25 +87,39 @@ mod chaveiro {
     }
 }
 
-/// Celular: a chave vai para o Android Keystore (etapa 3 de docs/android.md). Até lá, o build de debug
-/// usa uma chave fixa de teste (só com dados de teste) e o de release não abre o banco: a interface pede a chave.
+/// Celular: a chave fica cifrada por uma chave do Android Keystore (ChavePlugin.kt em gen/android).
+/// O plugin é chamado só daqui; a interface não tem acesso a ele.
 #[cfg(mobile)]
 mod chaveiro {
-    #[cfg(debug_assertions)]
-    const TESTE: &str = "746573746500000000000000000000000000000000000000000000000000f1a0";
+    use std::sync::OnceLock;
 
-    pub fn ler() -> Result<Option<String>, String> {
-        #[cfg(debug_assertions)]
-        return Ok(Some(TESTE.into()));
-        #[cfg(not(debug_assertions))]
-        Err("o chaveiro do celular ainda não está disponível".into())
+    use serde_json::{json, Value};
+    use tauri::plugin::{Builder, PluginHandle, TauriPlugin};
+    use tauri::Wry;
+
+    static ALCA: OnceLock<PluginHandle<Wry>> = OnceLock::new();
+
+    pub fn plugin() -> TauriPlugin<Wry> {
+        Builder::new("chave")
+            .setup(|_app, _api| {
+                #[cfg(target_os = "android")]
+                let _ = ALCA.set(_api.register_android_plugin("io.github.hudsonjunior42.fintrix", "ChavePlugin")?);
+                Ok(())
+            })
+            .build()
     }
 
-    pub fn guardar(_k: &str) -> Result<(), String> {
-        #[cfg(debug_assertions)]
-        return Ok(());
-        #[cfg(not(debug_assertions))]
-        Err("o chaveiro do celular ainda não está disponível".into())
+    fn alca() -> Result<&'static PluginHandle<Wry>, String> {
+        ALCA.get().ok_or_else(|| "chaveiro do celular não iniciou".into())
+    }
+
+    pub fn ler() -> Result<Option<String>, String> {
+        let r: Value = alca()?.run_mobile_plugin("ler", ()).map_err(|e| format!("chaveiro do celular indisponível: {e}"))?;
+        Ok(r["chave"].as_str().map(String::from))
+    }
+
+    pub fn guardar(k: &str) -> Result<(), String> {
+        alca()?.run_mobile_plugin::<Value>("guardar", json!({ "chave": k })).map(|_| ()).map_err(|e| e.to_string())
     }
 }
 
@@ -519,8 +533,11 @@ pub fn run() {
     // no Wayland, o app_id da janela é o nome do programa: com o identificador, ele casa com o .desktop e o ícone
     #[cfg(target_os = "linux")]
     glib::set_prgname(Some(SERVICO));
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
+    let construtor = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    // antes do setup: abrir_banco já lê a chave por ele
+    #[cfg(mobile)]
+    let construtor = construtor.plugin(chaveiro::plugin());
+    construtor
         .setup(|app| {
             let dir = pasta_de_dados(app.handle())?;
             fs::create_dir_all(&dir)?;
