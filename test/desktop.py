@@ -1,18 +1,22 @@
-"""Testa o app desktop (Tauri) pela interface, com dados numa pasta temporária e sem tocar no chaveiro real.
+"""Testa o app desktop (Tauri) pela interface, com dados em pastas temporárias e sem tocar no chaveiro real.
 
-1. primeira abertura: cria conta, lança uma despesa com comprovante e guarda uma cópia automática (test/desktop/fase1.js)
-2. reabre: dados, comprovante e cópia voltam do SQLite cifrado (fase2.js)
-3. reabre com a chave errada: o app não abre
-4. nenhum arquivo da pasta de dados tem os textos lançados em claro
+1. primeira abertura: cria conta, lança uma despesa com comprovante, guarda uma cópia automática e salva um
+   backup pela tela de Configurações; confere fontes locais e a política de conteúdo (test/desktop/fase1.js)
+2. reabre: dados, comprovante e cópia voltam do SQLite cifrado; mostra a chave de recuperação (fase2.js)
+3. reabre sem a chave no chaveiro: o app pede a chave, recusa a errada e abre com a certa (sem-chave.js)
+4. reabre com a chave errada no chaveiro: o app não mostra os dados e pede a chave
+5. outro "computador" (pasta e chave novas): restaura o backup da etapa 1 (restaurar.js)
+6. a pasta de dados é só do usuário (700) e nenhum arquivo dela tem os textos lançados em claro
 
 Precisa de tela (X11/Wayland). Rode da raiz: python3 test/desktop.py
 """
-import os, pathlib, secrets, shutil, subprocess, sys, tempfile
+import json, os, pathlib, secrets, shutil, stat, subprocess, sys, tempfile
 
 RAIZ = pathlib.Path(__file__).resolve().parents[1]
 AQUI = RAIZ / "test" / "desktop"
 CARGO = shutil.which("cargo") or str(pathlib.Path.home() / ".cargo/bin/cargo")
 APP = RAIZ / "target/debug/fintrix"
+SEGREDOS = (b"Supermercado", b"Nubank", b"COMPROVANTE-SEGREDO", b"recibo.pdf")
 
 falhas = []
 def check(rotulo, got, exp):
@@ -26,40 +30,49 @@ subprocess.run([sys.executable, str(RAIZ / "tools/tauri_prep.py")], check=True)
 subprocess.run([CARGO, "build", "-q", "-p", "fintrix"], cwd=RAIZ, check=True)
 
 (RAIZ / "test/tmp").mkdir(parents=True, exist_ok=True)
-dados = pathlib.Path(tempfile.mkdtemp(prefix="desktop-", dir=RAIZ / "test/tmp"))
-chave = secrets.token_hex(32)
+tmp = pathlib.Path(tempfile.mkdtemp(prefix="desktop-", dir=RAIZ / "test/tmp"))
+saida = tmp / "salvos"; saida.mkdir()
 comum = (AQUI / "comum.js").read_text()
 
-def abrir(fase, chave_usada):
-    roteiro = dados / f"roteiro-{fase}.js"
-    roteiro.write_text(comum + "\n" + (AQUI / f"{fase}.js").read_text() if fase else "")
-    env = dict(os.environ, FINTRIX_DADOS=str(dados / "app"), FINTRIX_CHAVE=chave_usada, FINTRIX_TESTE=str(roteiro))
+def abrir(rotulo, roteiro, dados, chave_chaveiro, chave_real, extra=""):
+    """Abre o app com o roteiro; chave_chaveiro é o que o "chaveiro" tem (vazio = nada), chave_real vai para o roteiro."""
+    arq = tmp / "roteiro.js"
+    consts = f"const CHAVE = {json.dumps(chave_real)}; const SAIDA = {json.dumps(str(saida))};{extra}\n"
+    arq.write_text(comum + "\n" + consts + (AQUI / roteiro).read_text())
+    env = dict(os.environ, FINTRIX_DADOS=str(dados), FINTRIX_CHAVE=chave_chaveiro, FINTRIX_TESTE=str(arq), FINTRIX_SALVAR_EM=str(saida))
     try:
         r = subprocess.run([str(APP)], env=env, capture_output=True, text=True, timeout=90)
-    except subprocess.TimeoutExpired:
-        return None, "tempo esgotado (o roteiro não chamou teste_fim)"
+        cod, texto = r.returncode, r.stdout + r.stderr
+    except subprocess.TimeoutExpired as e:
+        cod, texto = None, (e.stdout or b"").decode() + "\n(tempo esgotado: o roteiro não chamou teste_fim)"
     finally:
-        roteiro.unlink(missing_ok=True)
-    saida = "\n".join(l for l in (r.stdout + r.stderr).splitlines() if "Locale not supported" not in l and "fallback 'C' locale" not in l)
-    return r.returncode, saida
+        arq.unlink(missing_ok=True)
+    texto = "\n".join(l for l in texto.splitlines() if l.strip() and "Locale not supported" not in l and "fallback 'C' locale" not in l)
+    print(f"--- {rotulo}\n{texto}")
+    check(f"{rotulo} terminou bem", cod, 0)
 
 try:
-    for fase in ("fase1", "fase2"):
-        cod, saida = abrir(fase, chave)
-        print(f"--- {fase}\n{saida}")
-        check(f"{fase} terminou bem", cod, 0)
+    dados, chave = tmp / "app", secrets.token_hex(32)
+    abrir("fase1", "fase1.js", dados, chave, chave)
+    abrir("fase2", "fase2.js", dados, chave, chave)
+    abrir("sem chave no chaveiro", "sem-chave.js", dados, "", chave)
+    abrir("chave errada no chaveiro", "sem-chave.js", dados, secrets.token_hex(32), chave)
 
-    cod, saida = abrir("fase2", secrets.token_hex(32))
-    print("--- chave errada\n" + saida.strip().splitlines()[-1] if saida.strip() else "--- chave errada (sem saída)")
-    check("chave errada não abre", cod not in (0, None), True)
+    backups = sorted(saida.glob("*.json"))
+    check("backup salvo pelo app", len(backups), 1)
+    if backups:
+        nova = secrets.token_hex(32)
+        abrir("restaurar em outro computador", "restaurar.js", tmp / "outro", nova, nova,
+              extra=f" const BACKUP = {json.dumps(backups[0].read_text())};")
 
-    # nada do que foi digitado pode aparecer em claro em nenhum arquivo do app
-    vazou = sorted(str(f.relative_to(dados)) for f in dados.rglob("*") if f.is_file()
-                   and any(t in f.read_bytes() for t in (b"Supermercado", b"Nubank", b"COMPROVANTE-SEGREDO", b"recibo.pdf")))
-    check("banco cifrado (cabeçalho)", (dados / "app/fintrix.db").read_bytes()[:15] == b"SQLite format 3", False)
+    check("pasta de dados só do usuário", oct(stat.S_IMODE(dados.stat().st_mode)), "0o700")
+    check("banco cifrado (cabeçalho)", (dados / "fintrix.db").read_bytes()[:15] == b"SQLite format 3", False)
+    # nada do que foi digitado pode aparecer em claro nos arquivos do app (o backup salvo de propósito fica fora)
+    vazou = sorted(str(f.relative_to(tmp)) for d in (dados, tmp / "outro") for f in d.rglob("*")
+                   if f.is_file() and any(t in f.read_bytes() for t in SEGREDOS))
     check("arquivos com dados em claro", vazou, [])
 finally:
-    shutil.rmtree(dados, ignore_errors=True)
+    shutil.rmtree(tmp, ignore_errors=True)
 
 print("\nRESULTADO:", "TUDO CERTO" if not falhas else f"{len(falhas)} falha(s): {falhas}")
 sys.exit(1 if falhas else 0)

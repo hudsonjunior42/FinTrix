@@ -37,16 +37,17 @@ Também pode ser acessado a partir de https://hudsonjunior42.github.io/FinTrix/
 
 O mesmo app como programa para Linux, feito com [Tauri 2](https://tauri.app): a interface é o `index.html` e a parte em Rust guarda os dados.
 
-- **Dados cifrados no computador.** Lançamentos, comprovantes e cópias automáticas ficam num SQLite cifrado com SQLCipher. A chave é aleatória e fica no chaveiro do sistema (gnome-keyring ou KWallet), nunca num arquivo.
+- **Dados cifrados no computador.** Lançamentos, comprovantes e cópias automáticas ficam num SQLite cifrado com SQLCipher, em `~/.local/share/io.github.hudsonjunior42.fintrix/`. A chave é aleatória e fica no chaveiro do sistema (gnome-keyring ou KWallet), nunca num arquivo. Anote a chave de recuperação em Configurações › Seus dados.
+- **Funciona sem internet** (fontes incluídas) e não faz pedidos para fora. Backup e CSV são salvos pela janela "Salvar como" do sistema.
 - **Pacotes:** AppImage (qualquer distribuição) e .deb (Debian e Ubuntu). Gere com os comandos em [Desenvolvimento](#app-desktop-tauri).
 - **Para trazer os dados** do navegador ou do claude.ai: baixe um backup lá e use *Restaurar um backup* no app desktop.
-- **Ainda é protótipo:** testado só no Linux, sem sincronização entre aparelhos. Detalhes e limitações em [docs/desktop-tauri.md](docs/desktop-tauri.md). A versão Android é a próxima fase.
+- **Ainda é protótipo:** testado só no Linux, sem senha de abertura e sem sincronização entre aparelhos. Detalhes e limitações em [docs/desktop-tauri.md](docs/desktop-tauri.md). A versão Android é a próxima fase.
 
 ## Estrutura
 
 ```
 index.html            o app completo (HTML, CSS e JavaScript num arquivo só)
-assets/               logo (SVG e PNG)
+assets/               logo (SVG e PNG) e fontes que vão no app desktop (fonts/)
 Cargo.toml            workspace Rust do app desktop
 crates/fintrix-core/  armazenamento cifrado (SQLCipher) usado pelo app desktop
 src-tauri/            casca Tauri: janela, chave no chaveiro do sistema, ícones e configuração dos pacotes
@@ -62,7 +63,7 @@ tools/
   capturas.py         gera as capturas de tela de docs/img/ com dados fictícios
 test/
   ui/                 testes de interface com banco simulado (um arquivo por funcionalidade)
-  desktop.py          testa o app desktop pela interface (dados, comprovantes, chave errada, nada em claro)
+  desktop.py          testa o app desktop pela interface (dados, comprovantes, backup e restauração, chave de recuperação, nada em claro)
   desktop/            roteiros que o app desktop executa durante esse teste
   v1.py, v11.py       testes de integração das versões 1.0 e 1.1 (segurança dos dados, importação, migração)
   regressao.py        compara duas versões do app com a mesma base grande
@@ -71,7 +72,7 @@ test/
 
 ## Desenvolvimento
 
-- **Sem build e sem dependências.** É JavaScript puro num arquivo só. As fontes vêm do Google Fonts.
+- **Sem build e sem dependências.** É JavaScript puro num arquivo só. As fontes vêm do Google Fonts (no app desktop, de `assets/fonts/`).
 - **Camada de dados.** Todo acesso a dados passa pelo bloco "camada de dados" no início do script (`Backends.local`). Para hospedar com sincronização própria (PocketBase, Supabase…), basta acrescentar outro backend que cumpra o mesmo contrato.
 - **Valores em centavos** (inteiros), datas `AAAA-MM-DD` e meses `AAAA-MM`.
 - **Testes** com Playwright (Python). Como instalar e rodar: [test/README.md](test/README.md).

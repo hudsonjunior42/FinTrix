@@ -2,40 +2,61 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
-use fintrix_core::{gerar_chave, Item, Op, Store};
-use serde_json::Value;
+use fintrix_core::{gerar_chave, Erro, Item, Op, Store};
+use serde_json::{json, Value};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_dialog::DialogExt;
 
-const SERVICO: &str = "br.com.fintrix.app";
+/// Igual ao `identifier` do tauri.conf.json: nome do serviço no chaveiro e da pasta de dados.
+const SERVICO: &str = "io.github.hudsonjunior42.fintrix";
+/// Identificador das primeiras versões do protótipo; os dados de lá são trazidos uma vez.
+const ANTIGO: &str = "br.com.fintrix.app";
 const USUARIO: &str = "chave-do-banco";
 
-/// Lê a chave do banco no chaveiro do sistema; na primeira execução gera e guarda uma.
-/// A chave nunca vai para o disco em texto puro: sem chaveiro disponível o app não abre.
-fn chave_do_banco(banco_existe: bool) -> Result<String, String> {
-    // testes (só em debug): chave e pasta vêm do ambiente, sem tocar no chaveiro real
+/// O banco aberto e a chave dele. Fica vazio (trancado) quando a chave não está no chaveiro:
+/// a interface pede a chave de recuperação (`informar_chave`).
+struct Banco {
+    arquivo: PathBuf,
+    aberto: RwLock<Option<(Arc<Store>, String)>>,
+    motivo: RwLock<Option<&'static str>>,
+}
+
+impl Banco {
+    fn store(&self) -> Result<Arc<Store>, String> {
+        let g = self.aberto.read().map_err(|_| "estado bloqueado")?;
+        g.as_ref().map(|(s, _)| s.clone()).ok_or_else(|| "banco trancado: informe a chave".into())
+    }
+}
+
+fn texto<E: std::fmt::Display>(e: E) -> String {
+    e.to_string()
+}
+
+/// Chave guardada no chaveiro. Ok(None) = não há chave; Err = chaveiro indisponível.
+fn ler_chave() -> Result<Option<String>, String> {
+    // testes (só em debug): a chave vem do ambiente, sem tocar no chaveiro real; vazia = sem chave
     #[cfg(debug_assertions)]
     if let Ok(k) = std::env::var("FINTRIX_CHAVE") {
-        return Ok(k);
+        return Ok(Some(k).filter(|k| !k.is_empty()));
     }
-    let entrada = keyring::Entry::new(SERVICO, USUARIO).map_err(|e| e.to_string())?;
-    match entrada.get_password() {
-        Ok(k) => Ok(k),
-        Err(keyring::Error::NoEntry) if !banco_existe => {
-            let k = gerar_chave().map_err(|e| e.to_string())?;
-            entrada.set_password(&k).map_err(|e| e.to_string())?;
-            Ok(k)
-        }
-        Err(keyring::Error::NoEntry) => Err(
-            "O banco existe, mas a chave não está no chaveiro do sistema. \
-             Restaure a chave ou um backup."
-                .into(),
-        ),
+    match keyring::Entry::new(SERVICO, USUARIO).map_err(texto)?.get_password() {
+        Ok(k) => Ok(Some(k)),
+        Err(keyring::Error::NoEntry) => Ok(None),
         Err(e) => Err(format!("chaveiro do sistema indisponível: {e}")),
     }
+}
+
+fn guardar_chave(k: &str) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("FINTRIX_CHAVE").is_some() {
+        return Ok(());
+    }
+    keyring::Entry::new(SERVICO, USUARIO).map_err(texto)?.set_password(k).map_err(texto)
 }
 
 fn pasta_de_dados(app: &AppHandle) -> tauri::Result<PathBuf> {
@@ -46,74 +67,195 @@ fn pasta_de_dados(app: &AppHandle) -> tauri::Result<PathBuf> {
     app.path().app_data_dir()
 }
 
-#[tauri::command]
-fn db_todos(store: State<Store>) -> Result<Vec<(String, Value)>, String> {
-    store.todos().map_err(|e| e.to_string())
+/// Traz o banco e a chave do identificador antigo, se a pasta nova ainda não tem banco.
+/// O resto da pasta antiga (dados da WebView) fica onde está e pode ser apagado.
+fn migrar_do_antigo(app: &AppHandle, dir: &Path) {
+    if dir.join("fintrix.db").exists() || std::env::var_os("FINTRIX_DADOS").is_some() {
+        return;
+    }
+    let Ok(antigo) = app.path().data_dir().map(|d| d.join(ANTIGO)) else { return };
+    if !antigo.join("fintrix.db").exists() {
+        return;
+    }
+    if let Ok(e) = keyring::Entry::new(ANTIGO, USUARIO) {
+        if let Ok(k) = e.get_password() {
+            if guardar_chave(&k).is_err() {
+                return; // sem a chave no lugar novo, não move nada
+            }
+            let _ = e.delete_credential();
+        }
+    }
+    for nome in ["fintrix.db", "fintrix.db-wal", "fintrix.db-shm"] {
+        let de = antigo.join(nome);
+        if de.exists() {
+            let _ = fs::rename(&de, dir.join(nome));
+        }
+    }
+}
+
+/// Pasta só do usuário (700): o banco é cifrado, mas a WebView guarda preferências em claro ali dentro.
+fn restringir(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+    }
+}
+
+fn abrir_banco(arquivo: &Path) -> Result<(Option<(Arc<Store>, String)>, Option<&'static str>), String> {
+    let existe = arquivo.exists();
+    Ok(match ler_chave() {
+        Ok(Some(k)) => match Store::abrir(arquivo, &k) {
+            Ok(s) => (Some((Arc::new(s), k)), None),
+            Err(Erro::ChaveIncorreta) => (None, Some("chave-incorreta")),
+            Err(e) => return Err(e.to_string()),
+        },
+        Ok(None) if !existe => {
+            let k = gerar_chave().map_err(texto)?;
+            guardar_chave(&k)?;
+            (Some((Arc::new(Store::abrir(arquivo, &k).map_err(texto)?), k)), None)
+        }
+        Ok(None) => (None, Some("sem-chave")),
+        Err(_) => (None, Some("sem-chaveiro")),
+    })
+}
+
+/// Corpo cru: 4 bytes (u32 little-endian) com o tamanho de um JSON, o JSON e depois os bytes do arquivo.
+fn quadro(corpo: &[u8]) -> Result<(Value, &[u8]), String> {
+    let n = corpo.get(..4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).ok_or("corpo curto")?;
+    let meta = corpo.get(4..4 + n).ok_or("corpo curto")?;
+    Ok((serde_json::from_slice(meta).map_err(texto)?, &corpo[4 + n..]))
 }
 
 #[tauri::command]
-fn db_gravar(store: State<Store>, path: String, data: Option<Value>) -> Result<(), String> {
-    store.gravar(&path, data.as_ref()).map_err(|e| e.to_string())
+fn estado_banco(banco: State<Banco>) -> Value {
+    let pronto = banco.aberto.read().map(|g| g.is_some()).unwrap_or(false);
+    let motivo = *banco.motivo.read().unwrap();
+    json!({ "pronto": pronto, "motivo": motivo, "existe": banco.arquivo.exists() })
+}
+
+/// Abre o banco com a chave de recuperação digitada e a guarda no chaveiro.
+#[tauri::command]
+fn informar_chave(banco: State<Banco>, chave: String) -> Result<Value, String> {
+    let k: String = chave.chars().filter(char::is_ascii_hexdigit).collect::<String>().to_lowercase();
+    if k.len() != 64 {
+        return Err("A chave tem 64 caracteres (0-9 e a-f); confira o que foi digitado.".into());
+    }
+    if !banco.arquivo.exists() {
+        return Err("Não há banco do FinTrix neste computador para abrir.".into());
+    }
+    let s = Store::abrir(&banco.arquivo, &k).map_err(|e| match e {
+        Erro::ChaveIncorreta => "Chave incorreta para este banco.".to_string(),
+        e => e.to_string(),
+    })?;
+    let salvo = guardar_chave(&k).is_ok();
+    *banco.aberto.write().map_err(texto)? = Some((Arc::new(s), k));
+    *banco.motivo.write().map_err(texto)? = None;
+    Ok(json!({ "salvo": salvo }))
+}
+
+/// A chave em grupos de 4, para anotar ou imprimir.
+#[tauri::command]
+fn chave_recuperacao(banco: State<Banco>) -> Result<String, String> {
+    let g = banco.aberto.read().map_err(texto)?;
+    let (_, k) = g.as_ref().ok_or("banco trancado")?;
+    Ok(k.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join("-"))
 }
 
 #[tauri::command]
-fn db_lote(store: State<Store>, ops: Vec<Op>) -> Result<(), String> {
-    store.lote(&ops).map_err(|e| e.to_string())
+fn db_todos(banco: State<Banco>) -> Result<Vec<(String, Value)>, String> {
+    banco.store()?.todos().map_err(texto)
+}
+
+#[tauri::command]
+fn db_gravar(banco: State<Banco>, path: String, data: Option<Value>) -> Result<(), String> {
+    banco.store()?.gravar(&path, data.as_ref()).map_err(texto)
+}
+
+#[tauri::command]
+fn db_lote(banco: State<Banco>, ops: Vec<Op>) -> Result<(), String> {
+    banco.store()?.lote(&ops).map_err(texto)
 }
 
 // lojas: o que no navegador fica nos outros IndexedDB (cópias automáticas, comprovantes); veja lojaTauri em index.html
 #[tauri::command]
-fn loja_todos(store: State<Store>, loja: String) -> Result<Vec<Item>, String> {
-    store.loja_todos(&loja).map_err(|e| e.to_string())
+fn loja_todos(banco: State<Banco>, loja: String) -> Result<Vec<Item>, String> {
+    banco.store()?.loja_todos(&loja).map_err(texto)
 }
 
 #[tauri::command]
-fn loja_get(store: State<Store>, loja: String, chave: Value) -> Result<Option<Item>, String> {
-    store.loja_get(&loja, &chave).map_err(|e| e.to_string())
+fn loja_get(banco: State<Banco>, loja: String, chave: Value) -> Result<Option<Item>, String> {
+    banco.store()?.loja_get(&loja, &chave).map_err(texto)
 }
 
 /// Conteúdo do arquivo, como bytes crus (ArrayBuffer no JS).
 #[tauri::command]
-fn loja_bytes(store: State<Store>, loja: String, chave: Value) -> Result<Response, String> {
-    match store.loja_bytes(&loja, &chave).map_err(|e| e.to_string())? {
+fn loja_bytes(banco: State<Banco>, loja: String, chave: Value) -> Result<Response, String> {
+    match banco.store()?.loja_bytes(&loja, &chave).map_err(texto)? {
         Some(b) => Ok(Response::new(b)),
         None => Err("arquivo não encontrado".into()),
     }
 }
 
 #[tauri::command]
-fn loja_gravar(store: State<Store>, loja: String, chave: Value, valor: Value) -> Result<(), String> {
-    store.loja_gravar(&loja, &chave, &valor, None).map_err(|e| e.to_string())
+fn loja_gravar(banco: State<Banco>, loja: String, chave: Value, valor: Value) -> Result<(), String> {
+    banco.store()?.loja_gravar(&loja, &chave, &valor, None).map_err(texto)
 }
 
-/// Corpo cru: 4 bytes (u32 little-endian) com o tamanho do JSON { loja, chave, valor }, o JSON e depois o arquivo.
+/// Corpo cru (`quadro`) com o JSON { loja, chave, valor } e o arquivo.
 #[tauri::command]
-fn loja_gravar_bytes(store: State<Store>, request: Request<'_>) -> Result<(), String> {
+fn loja_gravar_bytes(banco: State<Banco>, request: Request<'_>) -> Result<(), String> {
     let InvokeBody::Raw(corpo) = request.body() else {
         return Err("esperava bytes".into());
     };
-    let n = corpo.get(..4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).ok_or("corpo curto")?;
-    let meta = corpo.get(4..4 + n).ok_or("corpo curto")?;
-    let meta: Value = serde_json::from_slice(meta).map_err(|e| e.to_string())?;
+    let (meta, arq) = quadro(corpo)?;
     let (Some(loja), Some(chave), Some(valor)) = (meta["loja"].as_str(), meta.get("chave"), meta.get("valor")) else {
         return Err("cabeçalho incompleto".into());
     };
-    store.loja_gravar(loja, chave, valor, Some(&corpo[4 + n..])).map_err(|e| e.to_string())
+    banco.store()?.loja_gravar(loja, chave, valor, Some(arq)).map_err(texto)
 }
 
 #[tauri::command]
-fn loja_adicionar(store: State<Store>, loja: String, valor: Value) -> Result<i64, String> {
-    store.loja_adicionar(&loja, &valor).map_err(|e| e.to_string())
+fn loja_adicionar(banco: State<Banco>, loja: String, valor: Value) -> Result<i64, String> {
+    banco.store()?.loja_adicionar(&loja, &valor).map_err(texto)
 }
 
 #[tauri::command]
-fn loja_apagar(store: State<Store>, loja: String, chave: Value) -> Result<(), String> {
-    store.loja_apagar(&loja, &chave).map_err(|e| e.to_string())
+fn loja_apagar(banco: State<Banco>, loja: String, chave: Value) -> Result<(), String> {
+    banco.store()?.loja_apagar(&loja, &chave).map_err(texto)
 }
 
 #[tauri::command]
-fn loja_limpar(store: State<Store>, loja: String) -> Result<(), String> {
-    store.loja_limpar(&loja).map_err(|e| e.to_string())
+fn loja_limpar(banco: State<Banco>, loja: String) -> Result<(), String> {
+    banco.store()?.loja_limpar(&loja).map_err(texto)
+}
+
+/// Backup, CSV, .zip e comprovantes: corpo cru (`quadro`) com o JSON { nome } e o conteúdo.
+/// Abre a janela "Salvar como" do sistema; devolve o caminho gravado, ou null se a pessoa cancelou.
+#[tauri::command]
+async fn salvar_arquivo(app: AppHandle, request: Request<'_>) -> Result<Option<String>, String> {
+    let InvokeBody::Raw(corpo) = request.body() else {
+        return Err("esperava bytes".into());
+    };
+    let (meta, dados) = quadro(corpo)?;
+    // só o nome, nunca um caminho vindo da página
+    let nome = Path::new(meta["nome"].as_str().unwrap_or("arquivo"))
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("arquivo")
+        .to_string();
+    #[cfg(debug_assertions)]
+    if let Some(d) = std::env::var_os("FINTRIX_SALVAR_EM") {
+        let p = PathBuf::from(d).join(&nome);
+        fs::write(&p, dados).map_err(texto)?;
+        return Ok(Some(p.display().to_string()));
+    }
+    let Some(escolhido) = app.dialog().file().set_file_name(&nome).blocking_save_file() else {
+        return Ok(None);
+    };
+    let p = escolhido.into_path().map_err(texto)?;
+    fs::write(&p, dados).map_err(texto)?;
+    Ok(Some(p.display().to_string()))
 }
 
 /// Fim de um roteiro de teste (FINTRIX_TESTE): imprime o relatório e fecha o app. Sem efeito em release.
@@ -127,13 +269,16 @@ fn teste_fim(app: AppHandle, ok: bool, relatorio: String) {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = pasta_de_dados(app.handle())?;
             fs::create_dir_all(&dir)?;
+            restringir(&dir);
+            migrar_do_antigo(app.handle(), &dir);
             let arquivo = dir.join("fintrix.db");
-            let chave = chave_do_banco(arquivo.exists())?;
-            app.manage(Store::abrir(&arquivo, &chave)?);
-            // a WebView guarda o que é dela (preferências, comprovantes) junto com o banco
+            let (aberto, motivo) = abrir_banco(&arquivo)?;
+            app.manage(Banco { arquivo, aberto: RwLock::new(aberto), motivo: RwLock::new(motivo) });
+            // a WebView guarda o que é dela (preferências da tela) junto com o banco
             WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                 .title("FinTrix")
                 .inner_size(1200.0, 800.0)
@@ -159,6 +304,9 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            estado_banco,
+            informar_chave,
+            chave_recuperacao,
             db_todos,
             db_gravar,
             db_lote,
@@ -170,6 +318,7 @@ fn main() {
             loja_adicionar,
             loja_apagar,
             loja_limpar,
+            salvar_arquivo,
             teste_fim
         ])
         .run(tauri::generate_context!())

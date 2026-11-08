@@ -17,6 +17,15 @@ T.rodar(async () => {
   const todos = await anxTx("readonly", st => st.getAll());
   const zip = await montarZip(todos.map(r => ({ nome: r.nome, dados: r.blob })));
   T.check("zip com o comprovante", new TextDecoder().decode(new Uint8Array(await zip.arrayBuffer())).includes("COMPROVANTE-SEGREDO-123"), true);
+  T.q('.side [data-view="geral"]').click(); // a fase 1 terminou em Configurações, e o app lembra a tela
   await T.espera(() => T.q(".kpi .val"), "KPI na tela");
   T.check("KPI na tela", T.q(".kpi .val").innerText.replace(/ /g, " "), "R$ 1.240,10");
+
+  // Configurações › Seus dados › Chave de recuperação
+  T.q('.side [data-view="config"]').click();
+  await T.espera(() => T.q('[data-act="chave-ver"]'), "Configurações");
+  T.check("textos do app desktop", T.q("#content").innerText.includes("neste navegador"), false);
+  T.q('[data-act="chave-ver"]').click();
+  await T.espera(() => T.q("#ch-ver"), "janela da chave");
+  T.check("chave de recuperação mostrada", T.q("#ch-ver").textContent.replace(/[^0-9a-f]/g, ""), CHAVE);
 });

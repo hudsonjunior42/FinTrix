@@ -34,4 +34,14 @@ T.rodar(async () => {
   T.check("lançamento no SQLite", docs.filter(([p, d]) => /\/livro\/l\d{4}\//.test(p) && d.desc === "Supermercado" && d.valor === 25990).length, 1);
   T.check("comprovante no SQLite", (await T.invoke("loja_todos", { loja: "anexos" })).map(i => [i.valor.nome, i.bytes]), [["recibo.pdf", 32]]);
   T.check("cópia no SQLite", (await T.invoke("loja_todos", { loja: "sistema/copias" })).map(i => i.valor.motivo), ["Teste do app desktop"]);
+
+  // fontes do pacote (sem Google Fonts) e política de conteúdo (nada sai para a internet)
+  T.check("fonte local carregada", (await document.fonts.load('16px "IBM Plex Sans"')).length > 0, true);
+  T.check("pedido para fora bloqueado", await fetch("https://example.com/").then(() => "passou", () => "bloqueado"), "bloqueado");
+  // backup pela tela de Configurações; no teste o arquivo vai para FINTRIX_SALVAR_EM em vez da janela "Salvar como"
+  T.q('.side [data-view="config"]').click();
+  await T.espera(() => T.q('[data-act="exp-json"]'), "Configurações");
+  T.q('[data-act="exp-json"]').click();
+  await T.espera(() => /Backup pronto/.test(T.q("#dados-msg")?.textContent || ""), "backup salvo");
+  T.check("backup salvo na pasta escolhida", T.q("#dados-msg").textContent.includes(SAIDA), true);
 });
