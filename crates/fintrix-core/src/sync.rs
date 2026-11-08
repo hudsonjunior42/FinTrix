@@ -39,6 +39,38 @@ fn erro<E: std::fmt::Display>(e: E) -> Erro {
     Erro::Sync(e.to_string())
 }
 
+/// Erro do bucket/pasta. O `object_store` só mostra "Error performing GET" no nível de cima;
+/// a causa de verdade (DNS, TLS, 403…) está nas fontes encadeadas, então juntamos todas
+/// e acrescentamos uma dica em português.
+fn erro_os(e: object_store::Error) -> Erro {
+    use std::error::Error as _;
+    let mut texto = e.to_string();
+    let mut fonte = e.source();
+    while let Some(f) = fonte {
+        let t = f.to_string();
+        if !texto.contains(&t) {
+            texto.push_str(": ");
+            texto.push_str(&t);
+        }
+        fonte = f.source();
+    }
+    let baixo = texto.to_lowercase();
+    let dica = if baixo.contains("dns") || baixo.contains("lookup") || baixo.contains("resolve") {
+        "Não foi possível achar o endereço do bucket: confira o endpoint e a conexão com a internet."
+    } else if baixo.contains("certificate") || baixo.contains("tls") || baixo.contains("ssl") {
+        "Falha de segurança (TLS) ao falar com o bucket: confira o endpoint (use https) e a data/hora do computador."
+    } else if baixo.contains("timed out") || baixo.contains("timeout") || baixo.contains("connect") {
+        "Não consegui conectar ao bucket: confira o endpoint e a conexão com a internet."
+    } else if baixo.contains("403") || baixo.contains("signaturedoesnotmatch") || baixo.contains("invalidaccesskeyid") || baixo.contains("accessdenied") {
+        "O bucket recusou as chaves: confira Access key, Secret key e as permissões do bucket."
+    } else if baixo.contains("404") || baixo.contains("nosuchbucket") {
+        "Bucket não encontrado: confira o nome do bucket, o endpoint e a região."
+    } else {
+        ""
+    };
+    if dica.is_empty() { Erro::Sync(texto) } else { Erro::Sync(format!("{dica} ({texto})")) }
+}
+
 /// Onde o cofre fica.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "tipo", rename_all = "lowercase")]
@@ -241,11 +273,11 @@ pub fn salvar_cofre(store: &Store, cofre: Option<&Cofre>) -> Resultado<()> {
 pub async fn verificar(cofre: &Cofre) -> Resultado<usize> {
     let os = conectar(&cofre.destino)?;
     let ch = Chaves::de(cofre)?;
-    let estados: Vec<_> = os.list(Some(&Caminho::from(format!("{}/estado", cofre.base())))).try_collect().await.map_err(erro)?;
+    let estados: Vec<_> = os.list(Some(&Caminho::from(format!("{}/estado", cofre.base())))).try_collect().await.map_err(erro_os)?;
     let Some(primeiro) = estados.iter().find(|m| m.location.filename().is_some_and(|n| n.ends_with(".bin"))) else {
         return Err(erro("O cofre está vazio nesse destino. Confira a pasta ou o bucket."));
     };
-    let bytes = os.get(&primeiro.location).await.map_err(erro)?.bytes().await.map_err(erro)?;
+    let bytes = os.get(&primeiro.location).await.map_err(erro_os)?.bytes().await.map_err(erro_os)?;
     decifrar(&ch, &bytes)?;
     Ok(estados.len())
 }
@@ -259,7 +291,7 @@ pub async fn sincronizar(store: &Store, cofre: &Cofre, versao_app: u32) -> Resul
     let meu = format!("{}.bin", store.aparelho());
     let mut rel = Relatorio::default();
 
-    let estados: Vec<_> = os.list(Some(&Caminho::from(format!("{base}/estado")))).try_collect().await.map_err(erro)?;
+    let estados: Vec<_> = os.list(Some(&Caminho::from(format!("{base}/estado")))).try_collect().await.map_err(erro_os)?;
     let mut tem_o_meu = false;
     for m in estados {
         let Some(nome) = m.location.filename().map(String::from) else { continue };
@@ -276,7 +308,7 @@ pub async fn sincronizar(store: &Store, cofre: &Cofre, versao_app: u32) -> Resul
         if store.meta(&chave_meta)?.as_deref() == Some(marca.as_str()) {
             continue;
         }
-        let bytes = os.get(&m.location).await.map_err(erro)?.bytes().await.map_err(erro)?;
+        let bytes = os.get(&m.location).await.map_err(erro_os)?.bytes().await.map_err(erro_os)?;
         let (_, dados) = decifrar(&ch, &bytes)?;
         let estado: Estado = serde_json::from_slice(&dados)?;
         let versao_dados = estado.campos.iter().find(|c| c.path == CONFIG && c.campo == "versao").and_then(|c| c.valor.as_ref()?.as_u64());
@@ -291,7 +323,7 @@ pub async fn sincronizar(store: &Store, cofre: &Cofre, versao_app: u32) -> Resul
     if ultimo.is_some() && (!tem_o_meu || ultimo != store.meta("sync/enviado")?) {
         let estado = Estado { formato: FORMATO, aparelho: store.aparelho().to_string(), versao_app, campos: store.campos_todos()? };
         let arq = cifrar(&ch, store.aparelho(), &serde_json::to_vec(&estado)?)?;
-        os.put(&Caminho::from(format!("{base}/estado/{meu}")), arq.into()).await.map_err(erro)?;
+        os.put(&Caminho::from(format!("{base}/estado/{meu}")), arq.into()).await.map_err(erro_os)?;
         store.definir_meta("sync/enviado", ultimo.as_deref())?;
         rel.enviou = true;
     }
@@ -301,7 +333,7 @@ pub async fn sincronizar(store: &Store, cofre: &Cofre, versao_app: u32) -> Resul
         .list(Some(&Caminho::from(format!("{base}/anexos"))))
         .try_collect::<Vec<_>>()
         .await
-        .map_err(erro)?
+        .map_err(erro_os)?
         .into_iter()
         .filter_map(|m| m.location.filename().and_then(|n| n.strip_suffix(".bin")).map(String::from))
         .collect();
@@ -315,7 +347,7 @@ pub async fn sincronizar(store: &Store, cofre: &Cofre, versao_app: u32) -> Resul
         }
         let bytes = store.loja_bytes("anexos", &it.chave)?.unwrap_or_default();
         let arq = cifrar(&ch, store.aparelho(), &juntar(&serde_json::json!({ "id": id, "valor": it.valor }), &bytes)?)?;
-        os.put(&Caminho::from(format!("{base}/anexos/{nome}.bin")), arq.into()).await.map_err(erro)?;
+        os.put(&Caminho::from(format!("{base}/anexos/{nome}.bin")), arq.into()).await.map_err(erro_os)?;
         rel.anexos_enviados += 1;
     }
     let citados: BTreeSet<String> = store
@@ -330,7 +362,7 @@ pub async fn sincronizar(store: &Store, cofre: &Cofre, versao_app: u32) -> Resul
         if !remotos.contains(&nome) {
             continue;
         }
-        let bytes = os.get(&Caminho::from(format!("{base}/anexos/{nome}.bin"))).await.map_err(erro)?.bytes().await.map_err(erro)?;
+        let bytes = os.get(&Caminho::from(format!("{base}/anexos/{nome}.bin"))).await.map_err(erro_os)?.bytes().await.map_err(erro_os)?;
         let (_, dados) = decifrar(&ch, &bytes)?;
         let (meta, arq) = separar(&dados)?;
         store.loja_gravar("anexos", &Value::from(id.as_str()), &meta["valor"], Some(arq))?;
