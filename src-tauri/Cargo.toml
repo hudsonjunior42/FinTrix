@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# o Android carrega a casca como biblioteca (cdylib); o desktop usa o main.rs
+[lib]
+name = "fintrix_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -11,11 +16,13 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde_json = "1"
 fintrix-core = { path = "../crates/fintrix-core" }
-# chave do banco no chaveiro do sistema (Secret Service no Linux, Keychain, Credential Manager)
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 tauri-plugin-dialog = "2"
 # sincronização em segundo plano
 tokio = { version = "1", features = ["time", "sync", "macros"] }
+
+# chave do banco no chaveiro do sistema (Secret Service no Linux, Keychain, Credential Manager); no celular, outro caminho
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 
 # nome do programa no GTK = app_id no Wayland, que o KDE e o GNOME usam para achar o ícone (.desktop)
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -29,7 +29,7 @@ fintrix/<cofre>/anexos/<código>.bin     um comprovante cifrado; código = HMAC 
 - **Cifra.** A chave do cofre (256 bits aleatórios) gera, por HKDF-SHA256, uma chave de cifra e uma de nomes. Arquivo: `FTX1` · formato · id do aparelho · nonce de 24 bytes · XChaCha20-Poly1305(deflate(JSON)), com o cabeçalho autenticado. O destino vê só quantos aparelhos existem, o tamanho dos arquivos e a hora das gravações.
 - **O que fica só no aparelho:** cópias automáticas e preferências da tela. A configuração do cofre (destino, credenciais e chave) fica no banco cifrado do aparelho.
 
-Código: `crates/fintrix-core/src/campos.rs` (achatar, remontar, relógio), `Store::lote`/`Store::mesclar` em `lib.rs`, `crates/fintrix-core/src/sync.rs` (cifra, destino, ciclo) e os comandos `sync_*` em `src-tauri/src/main.rs`. Na interface, `persistTauri().ouvir` aplica no cache os documentos que chegam (evento `db-remoto`), e o bloco Sincronização fica em `blocoSync`.
+Código: `crates/fintrix-core/src/campos.rs` (achatar, remontar, relógio), `Store::lote`/`Store::mesclar` em `lib.rs`, `crates/fintrix-core/src/sync.rs` (cifra, destino, ciclo) e os comandos `sync_*` em `src-tauri/src/lib.rs`. Na interface, `persistTauri().ouvir` aplica no cache os documentos que chegam (evento `db-remoto`), e o bloco Sincronização fica em `blocoSync`.
 
 ## Limitações conhecidas
 

@@ -30,7 +30,7 @@ Esta máquina já tem o `adb` (pacote `android-tools`) e o `tauri-cli` 2.12; fal
 
 Primeiro marco: `cargo build -p fintrix-core --target aarch64-linux-android` e `cargo test -p fintrix-core` no host continuam passando.
 
-## 2. A casca Tauri no celular (`src-tauri/src/main.rs`)
+## 2. A casca Tauri no celular (`src-tauri/src/lib.rs`)
 
 - **Ponto de entrada**: mover o `main()` para `lib.rs` com `#[cfg_attr(mobile, tauri::mobile_entry_point)] pub fn run()`, e o `main.rs` só chama `run()`. `Cargo.toml` ganha `[lib] crate-type = ["staticlib", "cdylib", "rlib"]`.
 - **Janela**: no celular não existem `inner_size`, `min_inner_size`, ícone nem `data_directory`; separar com `#[cfg(desktop)]`. `glib::set_prgname` e `registrar_atalho` já são só Linux.
@@ -72,6 +72,11 @@ Primeiro marco: `cargo build -p fintrix-core --target aarch64-linux-android` e `
 - `identifier` continua `io.github.hudsonjunior42.fintrix`; `versionCode` sobe a cada versão.
 - Distribuição: APK assinado no GitHub Releases (o usuário sobe; esta máquina não faz push). F-Droid ou Play Store depois (a Play exige `.aab`, política de privacidade e revisão).
 - Atualização: o APK novo instala por cima só se for assinado com a mesma chave; perder a chave obriga a desinstalar (e os dados locais vão junto, voltando pelo cofre ou pela chave de recuperação + backup).
+
+## Andamento
+
+- Feito: alvos Rust do Android instalados; casca movida para `lib.rs` com `run()` e `mobile_entry_point` (o `main.rs` só chama `run`); `keyring`, `migrar_do_antigo`, ícone e tamanho da janela só no desktop; no celular, `escolher_pasta` responde que lá é só bucket e a chave é fixa de teste no debug (release ainda sem chaveiro); SQLCipher com OpenSSL vendorizado no alvo Android. Desktop conferido (`cargo test -p fintrix-core`, `test/desktop.py`).
+- Falta para fechar a etapa 1: Android Studio (SDK + NDK), `cargo tauri android init` e o app abrindo no celular. O código do celular (`cfg(mobile)`) ainda não foi compilado: o `ring` e o SQLCipher precisam do clang do NDK.
 
 ## Ordem sugerida
 
