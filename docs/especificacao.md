@@ -91,7 +91,7 @@ O mesmo app do desktop (Tauri) no celular; como compilar, assinar e testar em [a
 - Sincronização só por bucket S3: "Ligar" mostra só o bucket e um código de cofre em pasta é recusado com explicação. Sincroniza também ao voltar para o app.
 - Pareamento: "Parear com outro aparelho"/"Entrar num cofre" tem **Ler QR code** (câmera), que lê o QR da janela "Código de pareamento" do outro aparelho e já pareia.
 - Botão voltar do Android: fecha o que estiver aberto, um de cada vez (visualizador, menu, janela, seleção), depois volta ao Início; no Início, sai do app.
-- Textos dizem "celular" no lugar de "computador"; sem o painel de atalhos de teclado. Os ícones das barras do sistema acompanham o tema do app.
+- Textos dizem "celular" no lugar de "computador"; sem o painel de atalhos de teclado. No cabeçalho, a Visão geral se chama "Geral" e o mês vai com 3 letras ("Nov 2026"), para caber ao lado do seletor. Os ícones das barras do sistema acompanham o tema do app.
 
 ## Verificação
 

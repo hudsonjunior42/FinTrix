@@ -83,7 +83,8 @@ node test/android/avaliar.mjs 9333 'S.fase'      # avalia na página; aceita awa
 - **Pareamento pelo QR code**: a janela "Código de pareamento" mostra o QR (`qr_svg`, crate `qrcode`); no celular, **Ler QR code** usa o plugin oficial `barcode-scanner` (permissões em `capabilities/celular.json`) e já pareia.
 - **Botão voltar**: o Tauri entrega o voltar ao histórico da WebView e, sem histórico, fecha o app. Enquanto houver algo aberto (visualizador, menu, janela, seleção, ou uma tela que não é o Início), fica uma entrada extra no histórico (`acertarVoltar`, chamado por um `MutationObserver`); o `popstate` dá um passo, como o Esc (`voltarUmPasso`).
 - **Barras do sistema**: o app desenha atrás das barras (`enableEdgeToEdge`); `barrasTauri()` → `barras` → `SistemaPlugin.barras` deixa os ícones escuros no tema claro do app e claros no escuro. O fundo da abertura segue o tema do sistema (`values*/fundo.xml`).
-- **Textos**: `celular()` e `aparelho()` na interface ("neste celular" em `aqui()`); sem o painel de atalhos de teclado.
+- **Textos**: `celular()` e `aparelho()` na interface ("neste celular" em `aqui()`); sem o painel de atalhos de teclado; cabeçalho com "Geral" e o mês em 3 letras (`mesAbrev`).
+- **Área segura do topo**: a WebView desenha atrás da barra de status e o `:root` desconta a área segura (`padding-top: env(safe-area-inset-top)`); o cabeçalho (`.top`) não soma de novo (somava, e sobrava uma faixa vazia da altura da barra, também na versão web instalada no celular).
 - **Leitor de QR no release**: o ML Kit (Google) acha os próprios componentes por reflexão; encolhido pelo R8, `InputImage.fromMediaImage` dava `NullPointerException` no primeiro quadro da câmera. `app/proguard-rules.pro` mantém `com.google.mlkit.**`, `com.google.android.gms.internal.mlkit_**` e `com.google.firebase.components.**`.
 - **Permissões**: `INTERNET` (S3) e `CAMERA` (QR code, pedida na hora). Nada de armazenamento externo.
 

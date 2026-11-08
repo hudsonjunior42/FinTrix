@@ -473,7 +473,7 @@ details.more[open] summary{margin-bottom:12px}
 @media (max-width:860px){
   .app{grid-template-columns:minmax(0,1fr)}
   .side{display:none}
-  .top{padding:10px 16px;padding-top:calc(10px + env(safe-area-inset-top,0px))}
+  .top{padding:10px 16px} /* a área segura do topo já vem do padding do :root */
   .top h1{font-size:19px}
   .logo-m{display:block}
   .top .newbtn{display:none}
@@ -684,6 +684,7 @@ const madd = (k, n) => t2k(k2t(k) + n);
 const dim = (y, m) => new Date(y, m, 0).getDate();
 const dadd = (ds, n) => { const [y, m, d] = ds.split("-").map(Number); const k = madd(`${y}-${pad(m)}`, n); const [yy, mm] = k.split("-").map(Number); return `${k}-${pad(Math.min(d, dim(yy, mm)))}`; };
 const mesLongo = k => { const [y, m] = k.split("-").map(Number); return `${MESES[m - 1]} ${y}`; };
+const mesAbrev = k => { const [y, m] = k.split("-").map(Number); return `${MESES[m - 1].slice(0, 3)} ${y}`; };
 const mesCurto = k => { const [y, m] = k.split("-").map(Number); return `${MESES[m - 1].slice(0, 3)}/${String(y).slice(2)}`; };
 const ddmm = ds => `${ds.slice(8, 10)}/${ds.slice(5, 7)}`;
 // datas na tela sempre como DD/MM/AAAA (o campo escondido guarda AAAA-MM-DD, como antes)
@@ -1829,10 +1830,11 @@ function renderTela() {
       <div class="state-acoes"><button class="btn pri" data-act="recarregar">Recarregar</button><button class="btn" data-act="bk-emergencia">${tx("Baixar backup de emergência", "Salvar backup de emergência")}</button></div></div>`; return; }
   if (fase === "onboarding") { $("#title").textContent = "Boas-vindas"; renderOnboarding(el); return; }
   derivar();
-  $("#mlabel").textContent = anualRel() ? S.mes.slice(0, 4) : mesLongo(S.mes);
+  // no celular o mês vai com 3 letras ("nov 2026", maiúscula pelo CSS) para o título caber ao lado
+  $("#mlabel").textContent = anualRel() ? S.mes.slice(0, 4) : celular() ? mesAbrev(S.mes) : mesLongo(S.mes);
   $$('#monthnav [data-act="mes"]').forEach(b => b.setAttribute("aria-label", anualRel() ? (b.dataset.d === "-1" ? "Ano anterior" : "Próximo ano") : (b.dataset.d === "-1" ? "Mês anterior" : "Próximo mês")));
   const v = VIEWS.find(x => x[0] === S.view) || VIEWS[0];
-  $("#title").textContent = v[1];
+  $("#title").textContent = celular() && v[0] === "geral" ? "Geral" : v[1];
   const fn = { geral: vGeral, lanc: vLanc, contas: vContas, cartoes: vCartoes, relatorios: vRelatorios, orcamento: vOrcamento, patrimonio: vPatrimonio, config: vConfig }[v[0]];
   const st = el.scrollTop, foco = chaveFoco(el);
   el.innerHTML = `<div class="wrap">${fn()}</div>`;
