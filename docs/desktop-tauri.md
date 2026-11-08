@@ -1,6 +1,10 @@
 # App desktop (Tauri 2) — protótipo
 
-**Status: protótipo.** `cargo test -p fintrix-core` passa (5 testes) e `cargo build -p fintrix` compila. O app abre no Linux (WebKitGTK), cria o `fintrix.db` e o arquivo não tem o cabeçalho "SQLite format 3" (cifrado). Ainda não foi testado de ponta a ponta pela interface (criar conta, lançar, reabrir) nem no Windows, macOS ou Android.
+**Status: protótipo, testado no Linux (WebKitGTK).** `cargo test -p fintrix-core` (5 testes) e `python3 test/desktop.py` passam: pela interface, cria a conta, lança uma despesa, fecha, reabre com os dados vindos do SQLite cifrado, recusa a chave errada e nenhum arquivo da pasta do app tem os textos lançados em claro. Não testado no Windows, macOS nem Android.
+
+## Teste pela interface
+
+`python3 test/desktop.py` compila o app de debug e o abre três vezes numa pasta temporária, com uma chave gerada para o teste (variáveis `FINTRIX_DADOS`, `FINTRIX_CHAVE` e `FINTRIX_TESTE`, que só valem no build de debug e não tocam no chaveiro real). Os roteiros ficam em `test/desktop/`: o app executa o roteiro na página e devolve o resultado pelo comando `teste_fim`. Precisa de tela.
 
 ## Como funciona
 
@@ -11,7 +15,7 @@
 
 ## O que ainda não está coberto
 
-- Comprovantes (anexos) e cópias automáticas continuam no IndexedDB da WebView.
+- Comprovantes (anexos) e cópias automáticas (`guardarCopia`, feitas antes de restaurar, migrar ou apagar tudo) continuam no IndexedDB da WebView (`webview/` na pasta do app), **sem criptografia**. O teste não passa por esses caminhos; é a próxima coisa a mover para o SQLite.
 - Textos do app ainda dizem "neste navegador".
 - Fontes ainda vêm do Google Fonts (sem internet, usa as de reserva).
 - Sem senha de abertura, bloqueio por inatividade nem sincronização (fases seguintes do plano).
