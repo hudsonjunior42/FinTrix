@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(pacman -Q rustup rust cargo webkit2gtk-4.1 gtk3 libayatana-appindicator librsvg openssl sqlcipher base-devel jdk-openjdk)",
-      "Bash(python3 -c \"import playwright; print\\('playwright ok'\\)\")",
-      "Bash(sudo -n true)"
-    ]
-  }
-}
