@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- o que o FileProvider pode entregar a outro app: só o necessário (o padrão do Tauri liberava todo o armazenamento) -->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-  <external-path name="my_images" path="." />
-  <cache-path name="my_cache_images" path="." />
+  <!-- fotos tiradas pela câmera no "Anexar foto" (RustWebChromeClient do wry) -->
+  <external-files-path name="fotos" path="Pictures/" />
+  <!-- comprovantes abertos no app do sistema (ArquivosPlugin) -->
+  <cache-path name="abrir" path="abrir/" />
 </paths>

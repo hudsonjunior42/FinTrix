@@ -17,6 +17,8 @@ tauri = { version = "2", features = [] }
 serde_json = "1"
 fintrix-core = { path = "../crates/fintrix-core" }
 tauri-plugin-dialog = "2"
+# grava o arquivo escolhido no "Salvar como": caminho no desktop, content:// no Android (a interface não tem acesso)
+tauri-plugin-fs = "2"
 # sincronização em segundo plano
 tokio = { version = "1", features = ["time", "sync", "macros"] }
 

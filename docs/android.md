@@ -37,8 +37,10 @@ Primeiro marco: `cargo build -p fintrix-core --target aarch64-linux-android` e `
 - **Chave do banco** (feito): o crate `keyring` não tem Android. `ChavePlugin.kt` (em `gen/android/app/src/main/java/…`) guarda a chave em `no_backup/chave-do-banco.bin`, cifrada com AES-GCM por uma chave do **Android Keystore** (`fintrix-chave-do-banco`, não exportável). O Rust chama o plugin em `chaveiro::ler`/`guardar` (`lib.rs`); o plugin não tem manifesto de permissões, então a interface não consegue chamá-lo (`plugin:chave|ler` é recusado). Sem a chave (app reinstalado, troca de celular), a interface mostra "Informe a chave de recuperação", igual ao desktop.
 - **Backup do Android desligado** (`allowBackup="false"`): o banco não vai para o Google Drive nem sai por `adb backup`; entre aparelhos, os dados vão pelo cofre ou pelo backup do FinTrix.
 - **Pasta de dados**: `app_data_dir()` no Android já é privada do app (`/data/data/<id>/`); `restringir` (700) não é necessário lá. `FINTRIX_*` continuam só no debug.
-- **Salvar arquivo** (`salvar_arquivo`: backup, CSV, comprovantes): o `tauri-plugin-dialog` no Android abre o seletor do sistema (SAF) e devolve um `content://`; gravar por ele em vez de `fs::write` no caminho. Alternativa: compartilhar pelo menu do Android (plugin de compartilhamento).
-- **Abrir arquivo** (restaurar backup, anexar comprovante): o `<input type="file">` da WebView do Android funciona; conferir também a câmera para foto de comprovante (`accept="image/*"`).
+- **Salvar arquivo** (feito; `salvar_arquivo`: backup, CSV, comprovantes, .zip): o `tauri-plugin-dialog` abre o "Salvar como" do sistema, que no Android devolve um `content://`; a gravação vai pelo `tauri-plugin-fs` (`app.fs().open`), que abre caminho no desktop e `content://` no Android. A interface não tem permissão do plugin fs (só `core:default`).
+- **Bytes pelo IPC** (feito): no Android o `invoke` vai por postMessage em JSON, e um `Uint8Array` chega ao Rust como lista de números; `bytes_do_pedido` aceita os dois formatos. Na volta (`loja_bytes`) o Tauri já entrega `ArrayBuffer`. Custo: gravar um comprovante de 3 MB leva ~4 s no celular (o JSON é grande); se incomodar, mandar em base64 ou em partes.
+- **Abrir arquivo** (restaurar backup, importar extrato, anexar comprovante): o `<input type="file">` da WebView do Android abre o seletor do sistema (o wry trata `onShowFileChooser`; com `capture` oferece a câmera). Só abre com toque de verdade: `click()` vindo do DevTools não abre.
+- **Ver PDF** (feito): a WebView do Android não mostra PDF em `<iframe>` (fica em branco). No celular o visualizador de comprovante mostra **Abrir**, que grava uma cópia em `cache/abrir/` (`abrir_arquivo`, apagada depois de 1 h) e entrega ao leitor do sistema por `FileProvider` (`ArquivosPlugin.kt`), só com leitura. O `file_paths.xml` foi reduzido a essa pasta e à das fotos da câmera (o padrão do Tauri liberava todo o armazenamento).
 - **Permissões**: só `INTERNET` (para o S3). Nada de armazenamento externo.
 
 ## 3. Sincronização no celular
@@ -79,7 +81,8 @@ Primeiro marco: `cargo build -p fintrix-core --target aarch64-linux-android` e `
   - o app abre na apresentação, o banco fica cifrado em `/data/data/<id>/fintrix.db` (600) e uma gravação sobrevive a fechar e reabrir;
   - S3: no Android o rustls não achava as raízes (`UnknownIssuer`); `sync::opcoes_android` carrega as do sistema (`/apex/com.android.conscrypt/cacerts` ou `/system/etc/security/cacerts`). Com chaves falsas, a AWS responde 403, ou seja, o TLS funciona.
 - **Etapa 3 feita**: chave no Android Keystore (veja o item 2). Conferido no celular: app novo cria e guarda a chave; reabrir entra direto; sem a chave, o banco fica trancado, a chave errada é recusada e a de recuperação abre e volta a ser guardada. Ícone do FinTrix no lugar do padrão do Tauri; backup do Android desligado.
-- Próxima: etapa 4 (salvar e abrir arquivos pelo seletor do sistema).
+- **Etapa 4 feita**: salvar pelo seletor do sistema (conferido: arquivo chegou em Downloads), comprovantes de 1 kB e 3 MB gravados e lidos sem diferença, PDF aberto no leitor do sistema. Falta conferir à mão o seletor do "Restaurar backup" e do "Anexar foto ou PDF" (precisa de toque de verdade).
+- Próxima: etapa 5 (sincronização por S3 no celular, pareamento, QR code).
 
 ### Como compilar e testar no celular
 

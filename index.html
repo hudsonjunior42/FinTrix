@@ -1287,6 +1287,8 @@ function persistTauri() {
 }
 const nativoTauri = () => !!(window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === "function");
 const aqui = () => nativoTauri() ? "neste computador" : "neste navegador";
+// app Android (o mesmo Tauri do desktop): a WebView não mostra PDF, o "Salvar como" é o seletor do sistema
+const celular = () => nativoTauri() && /Android/i.test(navigator.userAgent);
 // texto da versão web ou do app desktop (lá não há navegador, página nem download: os arquivos são salvos)
 const tx = (web, desktop) => nativoTauri() ? desktop : web;
 // No app desktop, os outros IndexedDB (sistema: cópias automáticas; anexos: comprovantes) viram lojas do SQLite cifrado.
@@ -1417,15 +1419,19 @@ function downloadsNavegador() {
   };
 }
 
+// corpo cru dos comandos de arquivo do app: tamanho do JSON (u32), o JSON e os bytes (veja quadro em lib.rs)
+async function corpoArquivo(meta, data) {
+  const m = new TextEncoder().encode(JSON.stringify(meta));
+  const arq = data instanceof Uint8Array ? data : new Uint8Array(await (data instanceof Blob ? data : new Blob([data])).arrayBuffer());
+  const corpo = new Uint8Array(4 + m.length + arq.length);
+  new DataView(corpo.buffer).setUint32(0, m.length, true); corpo.set(m, 4); corpo.set(arq, 4 + m.length);
+  return corpo;
+}
 // devolve o caminho gravado, ou null se a pessoa cancelou
 function downloadsTauri() {
   return {
     async save({ filename, data }) {
-      const meta = new TextEncoder().encode(JSON.stringify({ nome: filename }));
-      const arq = data instanceof Uint8Array ? data : new Uint8Array(await (data instanceof Blob ? data : new Blob([data])).arrayBuffer());
-      const corpo = new Uint8Array(4 + meta.length + arq.length);
-      new DataView(corpo.buffer).setUint32(0, meta.length, true); corpo.set(meta, 4); corpo.set(arq, 4 + meta.length);
-      return window.__TAURI__.core.invoke("salvar_arquivo", corpo);
+      return window.__TAURI__.core.invoke("salvar_arquivo", await corpoArquivo({ nome: filename }, data));
     },
   };
 }
@@ -2901,12 +2907,18 @@ async function abrirAnexo(id) {
   const v = document.createElement("div"); v.className = "mback anx-view"; v.id = "anx-view"; v.dataset.url = url || "";
   v.innerHTML = `<div class="modal lg" role="dialog" aria-modal="true" aria-label="${esc(meta.nome)}"><div class="mhead"><h3>${esc(meta.nome)}</h3><button class="icon-btn" data-act="anx-fechar" aria-label="Fechar">${svg("x")}</button></div>
     <div class="mbody anx-corpo">${!r ? `<div class="empty"><b>Arquivo não encontrado neste aparelho</b>Ele pode estar no .zip de comprovantes ou na pasta do backup automático (Configurações › Seus dados).</div>`
-      : ehImagem(r.tipo) ? `<img src="${url}" alt="${esc(r.nome)}">` : r.tipo === "application/pdf" ? `<iframe src="${url}" title="${esc(r.nome)}"></iframe>` : `<div class="empty"><b>${esc(r.nome)}</b>Este tipo de arquivo não tem visualização. ${tx("Baixe", "Salve")} para abrir.</div>`}</div>
-    <div class="mfoot"><span class="hint">${r ? tamTxt(r.tam) : ""}</span><span class="sp"></span>${r ? `<button class="btn" data-act="anx-baixar" data-id="${esc(id)}">${tx("Baixar", "Salvar")}</button>` : ""}<button class="btn pri" data-act="anx-fechar">Fechar</button></div></div>`;
+      : ehImagem(r.tipo) ? `<img src="${url}" alt="${esc(r.nome)}">` : r.tipo === "application/pdf" && celular() ? `<div class="empty"><b>${esc(r.nome)}</b>Toque em Abrir para ver o PDF no leitor do celular.</div>`
+      : r.tipo === "application/pdf" ? `<iframe src="${url}" title="${esc(r.nome)}"></iframe>` : `<div class="empty"><b>${esc(r.nome)}</b>Este tipo de arquivo não tem visualização. ${tx("Baixe", "Salve")} para abrir.</div>`}</div>
+    <div class="mfoot"><span class="hint">${r ? tamTxt(r.tam) : ""}</span><span class="sp"></span>${r && celular() && r.tipo === "application/pdf" ? `<button class="btn" data-act="anx-abrir" data-id="${esc(id)}">Abrir</button>` : ""}${r ? `<button class="btn" data-act="anx-baixar" data-id="${esc(id)}">${tx("Baixar", "Salvar")}</button>` : ""}<button class="btn pri" data-act="anx-fechar">Fechar</button></div></div>`;
   document.body.appendChild(v);
 }
 function fecharAnexo() { const v = $("#anx-view"); if (!v) return false; if (v.dataset.url) URL.revokeObjectURL(v.dataset.url); v.remove(); return true; }
 async function baixarAnexo(id) { const r = await anexoGet(id); if (r) await downloadsNavegador().save({ filename: r.nome, data: r.blob }); }
+// celular: entrega o comprovante ao app do sistema (leitor de PDF)
+async function abrirAnexoNoApp(id) {
+  const r = await anexoGet(id); if (!r) return;
+  try { await window.__TAURI__.core.invoke("abrir_arquivo", await corpoArquivo({ nome: r.nome, tipo: r.tipo }, r.blob)); } catch (e) { toast(String(e)); }
+}
 // Esc fecha o visualizador antes da janela de baixo
 document.addEventListener("keydown", ev => { if (ev.key === "Escape" && $("#anx-view")) { ev.stopImmediatePropagation(); ev.preventDefault(); fecharAnexo(); } }, true);
 
@@ -4642,7 +4654,7 @@ const A = {
   "meta-nova": () => abrirMeta(), "meta-editar": el => abrirMeta(el.dataset.id), "meta-salvar": () => salvarMeta(), "meta-excluir": () => excluirMeta(),
   invest: el => abrirAtualizarInvest(el.dataset.id), "invest-salvar": () => salvarAtualizarInvest(),
   "anx-ver": el => abrirAnexo(el.dataset.id), "anx-tirar": el => { MS.anexos.splice(Number(el.dataset.i), 1); renderAnexos(); }, "anx-fechar": () => fecharAnexo(),
-  "anx-baixar": el => baixarAnexo(el.dataset.id), "anx-zip": () => baixarAnexosZip(), "anx-pasta": () => recuperarAnexosPasta(), "anx-orfaos": () => apagarOrfaos(),
+  "anx-baixar": el => baixarAnexo(el.dataset.id), "anx-abrir": el => abrirAnexoNoApp(el.dataset.id), "anx-zip": () => baixarAnexosZip(), "anx-pasta": () => recuperarAnexosPasta(), "anx-orfaos": () => apagarOrfaos(),
   importar: el => abrirImportar(el.dataset.id),
   "imp-voltar": () => { MS.passo = MS.passo === "revisao" && MS.csv ? "colunas" : "arquivo"; desenharImp(); },
   "imp-colunas": () => { MS.passo = "colunas"; desenharImp(); }, "imp-colunas-ok": () => impColunasOk(),

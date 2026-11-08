@@ -82,6 +82,14 @@ v1.1 · 11/10/2026 · antes chamado Livro Caixa · substitui a abordagem por pla
 
 Visão geral · Lançamentos (por dia, filtros, faturas como linha, totais e saldo previsto) · Contas (transferir, ajustar saldo) · Cartões (fatura do mês, limite, pagar) · Relatórios (6 meses, categorias, essencial/estilo de vida/investido) · Orçamento (limite por categoria) · Configurações (categorias, tags, fixas, exportar CSV (`fintrix-AAAA-MM-DD.csv`), backup JSON, restaurar, apagar tudo).
 
+## App Android (em construção)
+
+O mesmo app do desktop (Tauri) no celular; plano e andamento em [android.md](android.md). Diferenças até aqui:
+- Chave do banco no Android Keystore (no desktop, no chaveiro do sistema); backup automático do Android desligado.
+- Salvar (backup, CSV, comprovantes, .zip) abre o "Salvar como" do sistema.
+- Comprovante em PDF: o visualizador não mostra o PDF; o botão Abrir entrega o arquivo ao leitor de PDF do celular.
+- Sincronização só por bucket S3 (escolher pasta responde que no celular é só bucket).
+
 ## Verificação
 
 - `test/novos.py` cobre calculadora, divisão (criar, editar, desfazer divisão, filtro pela parte), aviso de 80%/100%, duplicar, desfazer (lançamento e 3 parcelas), busca por período (mês, ano com compra no cartão, tudo, período escolhido, mostrar mais), janela da categoria (relatórios, pizza, orçamento, troca de mês), previsão, modo discreto, fixa variável (média) e fixa anual/semestral, e a janela no celular.

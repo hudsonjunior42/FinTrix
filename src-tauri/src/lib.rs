@@ -1,7 +1,9 @@
 //! A casca do FinTrix: desktop (main.rs chama `run`) e Android (`mobile_entry_point`).
 //! O que só existe num deles fica atrás de `#[cfg(desktop)]` / `#[cfg(mobile)]`.
 
+use std::borrow::Cow;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -12,6 +14,7 @@ use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_fs::{FilePath, FsExt, OpenOptions};
 
 /// Igual ao `identifier` do tauri.conf.json: nome do serviço no chaveiro e da pasta de dados.
 #[cfg(desktop)]
@@ -214,6 +217,21 @@ fn abrir_banco(arquivo: &Path) -> Result<(Option<(Arc<Store>, String)>, Option<&
     })
 }
 
+/// Bytes enviados pela interface (`invoke` com um Uint8Array). No desktop chegam crus; no Android o IPC é por
+/// postMessage, em JSON, e o Uint8Array chega como lista de números.
+fn bytes_do_pedido<'a>(request: &'a Request<'_>) -> Result<Cow<'a, [u8]>, String> {
+    match request.body() {
+        InvokeBody::Raw(b) => Ok(Cow::Borrowed(b)),
+        InvokeBody::Json(Value::Array(v)) => v
+            .iter()
+            .map(|n| n.as_u64().and_then(|n| u8::try_from(n).ok()))
+            .collect::<Option<Vec<u8>>>()
+            .map(Cow::Owned)
+            .ok_or_else(|| "esperava bytes".into()),
+        _ => Err("esperava bytes".into()),
+    }
+}
+
 /// Corpo cru: 4 bytes (u32 little-endian) com o tamanho de um JSON, o JSON e depois os bytes do arquivo.
 fn quadro(corpo: &[u8]) -> Result<(Value, &[u8]), String> {
     let n = corpo.get(..4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).ok_or("corpo curto")?;
@@ -303,10 +321,8 @@ fn loja_gravar(banco: State<Banco>, loja: String, chave: Value, valor: Value) ->
 /// Corpo cru (`quadro`) com o JSON { loja, chave, valor } e o arquivo.
 #[tauri::command]
 fn loja_gravar_bytes(banco: State<Banco>, request: Request<'_>) -> Result<(), String> {
-    let InvokeBody::Raw(corpo) = request.body() else {
-        return Err("esperava bytes".into());
-    };
-    let (meta, arq) = quadro(corpo)?;
+    let corpo = bytes_do_pedido(&request)?;
+    let (meta, arq) = quadro(&corpo)?;
     let (Some(loja), Some(chave), Some(valor)) = (meta["loja"].as_str(), meta.get("chave"), meta.get("valor")) else {
         return Err("cabeçalho incompleto".into());
     };
@@ -328,33 +344,92 @@ fn loja_limpar(banco: State<Banco>, loja: String) -> Result<(), String> {
     banco.store()?.loja_limpar(&loja).map_err(texto)
 }
 
+/// Só o nome do arquivo, nunca um caminho vindo da página.
+fn nome_seguro(meta: &Value) -> String {
+    Path::new(meta["nome"].as_str().unwrap_or("arquivo")).file_name().and_then(|n| n.to_str()).unwrap_or("arquivo").to_string()
+}
+
 /// Backup, CSV, .zip e comprovantes: corpo cru (`quadro`) com o JSON { nome } e o conteúdo.
 /// Abre a janela "Salvar como" do sistema; devolve o caminho gravado, ou null se a pessoa cancelou.
 #[tauri::command]
 async fn salvar_arquivo(app: AppHandle, request: Request<'_>) -> Result<Option<String>, String> {
-    let InvokeBody::Raw(corpo) = request.body() else {
-        return Err("esperava bytes".into());
-    };
-    let (meta, dados) = quadro(corpo)?;
-    // só o nome, nunca um caminho vindo da página
-    let nome = Path::new(meta["nome"].as_str().unwrap_or("arquivo"))
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("arquivo")
-        .to_string();
+    let corpo = bytes_do_pedido(&request)?;
+    let (meta, dados) = quadro(&corpo)?;
+    let nome = nome_seguro(&meta);
     #[cfg(debug_assertions)]
     if let Some(d) = std::env::var_os("FINTRIX_SALVAR_EM") {
         let p = PathBuf::from(d).join(&nome);
         fs::write(&p, dados).map_err(texto)?;
         return Ok(Some(p.display().to_string()));
     }
-    // no Android o seletor devolve um content://, que into_path não aceita (etapa 4 de docs/android.md)
     let Some(escolhido) = app.dialog().file().set_file_name(&nome).blocking_save_file() else {
         return Ok(None);
     };
-    let p = escolhido.into_path().map_err(texto)?;
-    fs::write(&p, dados).map_err(texto)?;
-    Ok(Some(p.display().to_string()))
+    // no desktop vem um caminho; no Android, um content:// do seletor do sistema, que só o plugin fs abre
+    let onde = match &escolhido {
+        FilePath::Path(p) => p.display().to_string(),
+        FilePath::Url(_) => nome,
+    };
+    let mut opcoes = OpenOptions::new();
+    opcoes.read(false).write(true).create(true).truncate(true);
+    let mut arq = app.fs().open(escolhido, opcoes).map_err(texto)?;
+    arq.write_all(dados).and_then(|_| arq.sync_all()).map_err(texto)?;
+    Ok(Some(onde))
+}
+
+/// Celular: abre um comprovante (corpo cru `quadro` com { nome, tipo }) no app do sistema, porque a WebView do
+/// Android não mostra PDF. A cópia fica em cache/abrir/; as de mais de uma hora saem na próxima vez.
+#[cfg(mobile)]
+#[tauri::command]
+async fn abrir_arquivo(app: AppHandle, request: Request<'_>) -> Result<(), String> {
+    let corpo = bytes_do_pedido(&request)?;
+    let (meta, dados) = quadro(&corpo)?;
+    let pasta = app.path().app_cache_dir().map_err(texto)?.join("abrir");
+    fs::create_dir_all(&pasta).map_err(texto)?;
+    for a in fs::read_dir(&pasta).map_err(texto)?.flatten() {
+        let velho = a.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|d| d.as_secs() > 3600);
+        if velho {
+            let _ = fs::remove_file(a.path());
+        }
+    }
+    let caminho = pasta.join(nome_seguro(&meta));
+    fs::write(&caminho, dados).map_err(texto)?;
+    arquivos::abrir(&caminho, meta["tipo"].as_str())
+}
+
+/// No desktop o visualizador mostra o PDF na própria janela.
+#[cfg(desktop)]
+#[tauri::command]
+async fn abrir_arquivo() -> Result<(), String> {
+    Err("só no celular".into())
+}
+
+/// Celular: abre arquivos no app do sistema (ArquivosPlugin.kt em gen/android). Chamado só daqui.
+#[cfg(mobile)]
+mod arquivos {
+    use std::path::Path;
+    use std::sync::OnceLock;
+
+    use serde_json::{json, Value};
+    use tauri::plugin::{Builder, PluginHandle, TauriPlugin};
+    use tauri::Wry;
+
+    static ALCA: OnceLock<PluginHandle<Wry>> = OnceLock::new();
+
+    pub fn plugin() -> TauriPlugin<Wry> {
+        Builder::new("arquivos")
+            .setup(|_app, _api| {
+                #[cfg(target_os = "android")]
+                let _ = ALCA.set(_api.register_android_plugin("io.github.hudsonjunior42.fintrix", "ArquivosPlugin")?);
+                Ok(())
+            })
+            .build()
+    }
+
+    pub fn abrir(caminho: &Path, tipo: Option<&str>) -> Result<(), String> {
+        let alca = ALCA.get().ok_or("o app ainda não terminou de abrir")?;
+        alca.run_mobile_plugin::<Value>("abrir", json!({ "caminho": caminho, "tipo": tipo })).map(|_| ()).map_err(|e| e.to_string())
+    }
 }
 
 // ---------- sincronização (veja fintrix_core::sync)
@@ -533,10 +608,10 @@ pub fn run() {
     // no Wayland, o app_id da janela é o nome do programa: com o identificador, ele casa com o .desktop e o ícone
     #[cfg(target_os = "linux")]
     glib::set_prgname(Some(SERVICO));
-    let construtor = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    let construtor = tauri::Builder::default().plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_fs::init());
     // antes do setup: abrir_banco já lê a chave por ele
     #[cfg(mobile)]
-    let construtor = construtor.plugin(chaveiro::plugin());
+    let construtor = construtor.plugin(chaveiro::plugin()).plugin(arquivos::plugin());
     construtor
         .setup(|app| {
             let dir = pasta_de_dados(app.handle())?;
@@ -598,6 +673,7 @@ pub fn run() {
             loja_apagar,
             loja_limpar,
             salvar_arquivo,
+            abrir_arquivo,
             sync_estado,
             sync_agora,
             sync_criar,
