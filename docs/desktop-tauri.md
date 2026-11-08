@@ -34,11 +34,14 @@ As primeiras versões do protótipo usavam o identificador `br.com.fintrix.app`.
 - **Textos:** no app desktop, `tx(web, desktop)` e `aqui()` trocam "navegador", "página" e "baixar" por "computador", "tela" e "salvar".
 - **Sem internet:** o `tools/tauri_prep.py` troca o Google Fonts por `assets/fonts/` (IBM Plex Sans, IBM Plex Mono, Bricolage Grotesque, licença SIL OFL 1.1) na cópia empacotada. A política de conteúdo (`csp` no `tauri.conf.json`) só permite arquivos do próprio app, `blob:`/`data:` para imagens e o canal do Tauri; qualquer pedido para fora é bloqueado.
 
+## Sincronização
+
+Entre aparelhos, por uma pasta sincronizada ou um bucket S3, com tudo cifrado no aparelho: veja [sincronizacao.md](sincronizacao.md).
+
 ## O que ainda não está coberto
 
 - Sem senha de abertura e bloqueio por inatividade.
 - Sem backup automático numa pasta (a versão do navegador usa uma API do Chrome que a WebView não tem).
-- Sem sincronização entre aparelhos (próxima fase do plano).
 - A janela "Salvar como" de verdade não é exercitada pelo teste automático (ele grava direto numa pasta temporária).
 - Preferências da tela que estavam na WebView da pasta antiga não são migradas (o app abre com as preferências padrão).
 

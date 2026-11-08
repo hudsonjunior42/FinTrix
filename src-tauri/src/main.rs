@@ -5,11 +5,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+use fintrix_core::sync::{self, Cofre, Destino};
 use fintrix_core::{gerar_chave, Erro, Item, Op, Store};
 use serde_json::{json, Value};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
 
 /// Igual ao `identifier` do tauri.conf.json: nome do serviço no chaveiro e da pasta de dados.
@@ -31,6 +32,16 @@ impl Banco {
         let g = self.aberto.read().map_err(|_| "estado bloqueado")?;
         g.as_ref().map(|(s, _)| s.clone()).ok_or_else(|| "banco trancado: informe a chave".into())
     }
+}
+
+/// Estado da sincronização em segundo plano. `versao` é o VERSAO_DADOS do app (vem da interface).
+#[derive(Default)]
+struct Sincronia {
+    versao: std::sync::Mutex<Option<u32>>,
+    rodando: tokio::sync::Mutex<()>,
+    erro: std::sync::Mutex<Option<String>>,
+    outros: std::sync::Mutex<usize>,
+    acordar: tokio::sync::Notify,
 }
 
 fn texto<E: std::fmt::Display>(e: E) -> String {
@@ -197,13 +208,17 @@ fn db_todos(banco: State<Banco>) -> Result<Vec<(String, Value)>, String> {
 }
 
 #[tauri::command]
-fn db_gravar(banco: State<Banco>, path: String, data: Option<Value>) -> Result<(), String> {
-    banco.store()?.gravar(&path, data.as_ref()).map_err(texto)
+fn db_gravar(banco: State<Banco>, sinc: State<Sincronia>, path: String, data: Option<Value>) -> Result<(), String> {
+    banco.store()?.gravar(&path, data.as_ref()).map_err(texto)?;
+    sinc.acordar.notify_one();
+    Ok(())
 }
 
 #[tauri::command]
-fn db_lote(banco: State<Banco>, ops: Vec<Op>) -> Result<(), String> {
-    banco.store()?.lote(&ops).map_err(texto)
+fn db_lote(banco: State<Banco>, sinc: State<Sincronia>, ops: Vec<Op>) -> Result<(), String> {
+    banco.store()?.lote(&ops).map_err(texto)?;
+    sinc.acordar.notify_one();
+    Ok(())
 }
 
 // lojas: o que no navegador fica nos outros IndexedDB (cópias automáticas, comprovantes); veja lojaTauri em index.html
@@ -287,6 +302,127 @@ async fn salvar_arquivo(app: AppHandle, request: Request<'_>) -> Result<Option<S
     Ok(Some(p.display().to_string()))
 }
 
+// ---------- sincronização (veja fintrix_core::sync)
+
+/// Um ciclo agora. Avisa a interface dos documentos que mudaram ("db-remoto") e do estado ("sync-estado").
+async fn ciclo(app: &AppHandle) -> Result<Value, String> {
+    let sinc = app.state::<Sincronia>();
+    let _vez = sinc.rodando.lock().await;
+    let store = app.state::<Banco>().store()?;
+    let Some(cofre) = sync::cofre_salvo(&store).map_err(texto)? else { return Ok(json!({ "ligado": false })) };
+    let Some(versao) = *sinc.versao.lock().unwrap() else { return Err("a interface ainda não abriu".into()) };
+    let r = sync::sincronizar(&store, &cofre, versao).await;
+    let res = match r {
+        Ok(rel) => {
+            if !rel.alterados.is_empty() {
+                let _ = app.emit("db-remoto", &rel.alterados);
+            }
+            *sinc.erro.lock().unwrap() = None;
+            *sinc.outros.lock().unwrap() = rel.outros_aparelhos;
+            Ok(json!({ "alterados": rel.alterados.len(), "enviou": rel.enviou, "anexosEnviados": rel.anexos_enviados, "anexosBaixados": rel.anexos_baixados }))
+        }
+        Err(e) => {
+            *sinc.erro.lock().unwrap() = Some(e.to_string());
+            Err(e.to_string())
+        }
+    };
+    let _ = app.emit("sync-estado", estado_sync(app));
+    res
+}
+
+fn estado_sync(app: &AppHandle) -> Value {
+    let sinc = app.state::<Sincronia>();
+    let Ok(store) = app.state::<Banco>().store() else { return json!({ "ligado": false }) };
+    let cofre = sync::cofre_salvo(&store).ok().flatten();
+    let ultimo = store.meta("sync/ultimo").ok().flatten().and_then(|v| v.parse::<u64>().ok());
+    json!({
+        "ligado": cofre.is_some(),
+        "tipo": cofre.as_ref().map(|c| match c.destino { Destino::Pasta { .. } => "pasta", Destino::S3 { .. } => "s3" }),
+        "destino": cofre.as_ref().map(|c| c.destino.descricao()),
+        "ultimo": ultimo,
+        "erro": *sinc.erro.lock().unwrap(),
+        "outros": *sinc.outros.lock().unwrap(),
+    })
+}
+
+/// Sincroniza a cada minuto e alguns segundos depois de cada gravação local.
+async fn sincronizar_sempre(app: AppHandle) {
+    loop {
+        let sinc = app.state::<Sincronia>();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(60), sinc.acordar.notified()).await;
+        // junta gravações seguidas num envio só
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        let _ = ciclo(&app).await;
+    }
+}
+
+#[tauri::command]
+fn sync_estado(app: AppHandle) -> Value {
+    estado_sync(&app)
+}
+
+/// A interface informa a versão de dados que entende e pede um ciclo (ao abrir e no botão "Sincronizar agora").
+#[tauri::command]
+async fn sync_agora(app: AppHandle, versao: u32) -> Result<Value, String> {
+    *app.state::<Sincronia>().versao.lock().unwrap() = Some(versao);
+    ciclo(&app).await
+}
+
+/// Cria um cofre com os dados deste aparelho e faz o primeiro envio. Devolve o código de pareamento.
+#[tauri::command]
+async fn sync_criar(app: AppHandle, destino: Destino, versao: u32) -> Result<String, String> {
+    let store = app.state::<Banco>().store()?;
+    let cofre = Cofre::novo(destino).map_err(texto)?;
+    sync::conectar(&cofre.destino).map_err(texto)?;
+    sync::salvar_cofre(&store, Some(&cofre)).map_err(texto)?;
+    *app.state::<Sincronia>().versao.lock().unwrap() = Some(versao);
+    if let Err(e) = ciclo(&app).await {
+        sync::salvar_cofre(&store, None).map_err(texto)?;
+        return Err(e);
+    }
+    cofre.codigo().map_err(texto)
+}
+
+/// Entra num cofre existente: confere o código e o destino ANTES de trocar os dados deste aparelho pelos do cofre.
+/// `pasta`: no destino do tipo pasta, onde ela está neste aparelho (cada um tem o seu caminho).
+#[tauri::command]
+async fn sync_entrar(app: AppHandle, codigo: String, pasta: Option<String>, versao: u32) -> Result<Value, String> {
+    let store = app.state::<Banco>().store()?;
+    let mut cofre = Cofre::do_codigo(&codigo).map_err(texto)?;
+    if let (Destino::Pasta { pasta: p }, Some(nova)) = (&mut cofre.destino, pasta.filter(|x| !x.trim().is_empty())) {
+        *p = nova;
+    }
+    let aparelhos = sync::verificar(&cofre).await.map_err(texto)?;
+    store.esvaziar_documentos().map_err(texto)?;
+    sync::salvar_cofre(&store, Some(&cofre)).map_err(texto)?;
+    *app.state::<Sincronia>().versao.lock().unwrap() = Some(versao);
+    let r = ciclo(&app).await?;
+    Ok(json!({ "aparelhos": aparelhos, "ciclo": r }))
+}
+
+/// Código de pareamento do cofre ligado (tem os segredos: mostrar só a quem vai parear).
+#[tauri::command]
+fn sync_codigo(banco: State<Banco>) -> Result<String, String> {
+    let store = banco.store()?;
+    let c = sync::cofre_salvo(&store).map_err(texto)?.ok_or("a sincronização está desligada")?;
+    c.codigo().map_err(texto)
+}
+
+/// Desliga neste aparelho. Os dados continuam aqui e no cofre.
+#[tauri::command]
+fn sync_desligar(app: AppHandle) -> Result<Value, String> {
+    let store = app.state::<Banco>().store()?;
+    sync::salvar_cofre(&store, None).map_err(texto)?;
+    *app.state::<Sincronia>().erro.lock().unwrap() = None;
+    Ok(estado_sync(&app))
+}
+
+#[tauri::command]
+async fn escolher_pasta(app: AppHandle) -> Result<Option<String>, String> {
+    let Some(p) = app.dialog().file().blocking_pick_folder() else { return Ok(None) };
+    Ok(Some(p.into_path().map_err(texto)?.display().to_string()))
+}
+
 /// Fim de um roteiro de teste (FINTRIX_TESTE): imprime o relatório e fecha o app. Sem efeito em release.
 #[tauri::command]
 fn teste_fim(app: AppHandle, ok: bool, relatorio: String) {
@@ -312,6 +448,8 @@ fn main() {
             let arquivo = dir.join("fintrix.db");
             let (aberto, motivo) = abrir_banco(&arquivo)?;
             app.manage(Banco { arquivo, aberto: RwLock::new(aberto), motivo: RwLock::new(motivo) });
+            app.manage(Sincronia::default());
+            tauri::async_runtime::spawn(sincronizar_sempre(app.handle().clone()));
             // a WebView guarda o que é dela (preferências da tela) junto com o banco
             let mut janela = WebviewWindowBuilder::new(app, "main", WebviewUrl::default()).title("FinTrix");
             // no X11 (e no Windows) o ícone vem daqui; no Wayland, do .desktop (registrar_atalho)
@@ -357,6 +495,13 @@ fn main() {
             loja_apagar,
             loja_limpar,
             salvar_arquivo,
+            sync_estado,
+            sync_agora,
+            sync_criar,
+            sync_entrar,
+            sync_codigo,
+            sync_desligar,
+            escolher_pasta,
             teste_fim
         ])
         .run(tauri::generate_context!())

@@ -11,6 +11,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 getrandom = "0.2"
 thiserror = "1"
+# sincronização: cifra, derivação de chaves, compressão e destino (pasta ou S3)
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+hmac = "0.12"
+sha2 = "0.10"
+flate2 = "1"
+base64 = "0.22"
+object_store = { version = "0.12", features = ["aws"] }
+futures = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

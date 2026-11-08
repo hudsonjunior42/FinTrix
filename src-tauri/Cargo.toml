@@ -14,6 +14,8 @@ fintrix-core = { path = "../crates/fintrix-core" }
 # chave do banco no chaveiro do sistema (Secret Service no Linux, Keychain, Credential Manager)
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 tauri-plugin-dialog = "2"
+# sincronização em segundo plano
+tokio = { version = "1", features = ["time", "sync", "macros"] }
 
 # nome do programa no GTK = app_id no Wayland, que o KDE e o GNOME usam para achar o ícone (.desktop)
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -6,7 +6,9 @@
 3. reabre sem a chave no chaveiro: o app pede a chave, recusa a errada e abre com a certa (sem-chave.js)
 4. reabre com a chave errada no chaveiro: o app não mostra os dados e pede a chave
 5. outro "computador" (pasta e chave novas): restaura o backup da etapa 1 (restaurar.js)
-6. a pasta de dados é só do usuário (700) e nenhum arquivo dela tem os textos lançados em claro
+6. sincronização por uma pasta: o aparelho A liga e gera o código (sync-a1.js); o aparelho B, novo, entra
+   pela apresentação, recebe tudo e lança uma despesa (sync-b.js); o A reabre e recebe a despesa (sync-a2.js)
+7. a pasta de dados é só do usuário (700) e nenhum arquivo dela, nem do cofre, tem os textos lançados em claro
 
 Precisa de tela (X11/Wayland). Rode da raiz: python3 test/desktop.py
 """
@@ -32,12 +34,13 @@ subprocess.run([CARGO, "build", "-q", "-p", "fintrix"], cwd=RAIZ, check=True)
 (RAIZ / "test/tmp").mkdir(parents=True, exist_ok=True)
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="desktop-", dir=RAIZ / "test/tmp"))
 saida = tmp / "salvos"; saida.mkdir()
+cofre = tmp / "cofre"  # a "pasta sincronizada" que os dois aparelhos compartilham
 comum = (AQUI / "comum.js").read_text()
 
 def abrir(rotulo, roteiro, dados, chave_chaveiro, chave_real, extra=""):
     """Abre o app com o roteiro; chave_chaveiro é o que o "chaveiro" tem (vazio = nada), chave_real vai para o roteiro."""
     arq = tmp / "roteiro.js"
-    consts = f"const CHAVE = {json.dumps(chave_real)}; const SAIDA = {json.dumps(str(saida))};{extra}\n"
+    consts = f"const CHAVE = {json.dumps(chave_real)}; const SAIDA = {json.dumps(str(saida))}; const PASTA_SYNC = {json.dumps(str(cofre))};{extra}\n"
     arq.write_text(comum + "\n" + consts + (AQUI / roteiro).read_text())
     env = dict(os.environ, FINTRIX_DADOS=str(dados), FINTRIX_CHAVE=chave_chaveiro, FINTRIX_TESTE=str(arq), FINTRIX_SALVAR_EM=str(saida))
     try:
@@ -65,10 +68,17 @@ try:
         abrir("restaurar em outro computador", "restaurar.js", tmp / "outro", nova, nova,
               extra=f" const BACKUP = {json.dumps(backups[0].read_text())};")
 
+    abrir("sincronização: A liga", "sync-a1.js", dados, chave, chave)
+    codigo = (saida / "codigo.txt").read_text() if (saida / "codigo.txt").exists() else ""
+    chave_b = secrets.token_hex(32)
+    abrir("sincronização: B entra e lança", "sync-b.js", tmp / "aparelho-b", chave_b, chave_b, extra=f" const CODIGO = {json.dumps(codigo)};")
+    abrir("sincronização: A recebe", "sync-a2.js", dados, chave, chave)
+
     check("pasta de dados só do usuário", oct(stat.S_IMODE(dados.stat().st_mode)), "0o700")
     check("banco cifrado (cabeçalho)", (dados / "fintrix.db").read_bytes()[:15] == b"SQLite format 3", False)
     # nada do que foi digitado pode aparecer em claro nos arquivos do app (o backup salvo de propósito fica fora)
-    vazou = sorted(str(f.relative_to(tmp)) for d in (dados, tmp / "outro") for f in d.rglob("*")
+    check("cofre tem os dois aparelhos", len(list(cofre.rglob("estado/*.bin"))), 2)
+    vazou = sorted(str(f.relative_to(tmp)) for d in (dados, tmp / "outro", tmp / "aparelho-b", cofre) for f in d.rglob("*")
                    if f.is_file() and any(t in f.read_bytes() for t in SEGREDOS))
     check("arquivos com dados em claro", vazou, [])
 finally:

@@ -41,7 +41,8 @@ O mesmo app como programa para Linux, feito com [Tauri 2](https://tauri.app): a 
 - **Funciona sem internet** (fontes incluídas) e não faz pedidos para fora. Backup e CSV são salvos pela janela "Salvar como" do sistema.
 - **Pacotes:** AppImage (qualquer distribuição) e .deb (Debian e Ubuntu). Gere com os comandos em [Desenvolvimento](#app-desktop-tauri).
 - **Para trazer os dados** do navegador ou do claude.ai: baixe um backup lá e use *Restaurar um backup* no app desktop.
-- **Ainda é protótipo:** testado só no Linux, sem senha de abertura e sem sincronização entre aparelhos. Detalhes e limitações em [docs/desktop-tauri.md](docs/desktop-tauri.md). A versão Android é a próxima fase.
+- **Sincronização entre aparelhos** por uma pasta (Syncthing, Nextcloud) ou um bucket S3 (Cloudflare R2, Backblaze B2), cifrada no aparelho: o destino só vê arquivos ilegíveis. Detalhes em [docs/sincronizacao.md](docs/sincronizacao.md).
+- **Ainda é protótipo:** testado só no Linux e sem senha de abertura; a sincronização por S3 ainda não foi testada contra um bucket de verdade. Detalhes e limitações em [docs/desktop-tauri.md](docs/desktop-tauri.md). A versão Android é a próxima fase.
 
 ## Estrutura
 
@@ -49,12 +50,13 @@ O mesmo app como programa para Linux, feito com [Tauri 2](https://tauri.app): a 
 index.html            o app completo (HTML, CSS e JavaScript num arquivo só)
 assets/               logo (SVG e PNG) e fontes que vão no app desktop (fonts/)
 Cargo.toml            workspace Rust do app desktop
-crates/fintrix-core/  armazenamento cifrado (SQLCipher) usado pelo app desktop
+crates/fintrix-core/  armazenamento cifrado (SQLCipher) e sincronização entre aparelhos do app desktop
 src-tauri/            casca Tauri: janela, chave no chaveiro do sistema, ícones e configuração dos pacotes
 docs/
   especificacao.md    regras e decisões do app (fonte de verdade para mudanças)
   rodar-localmente.md uso fora do claude.ai e migração dos dados
   desktop-tauri.md    app desktop: como funciona, limitações, testes e pacotes
+  sincronizacao.md    sincronização entre aparelhos: uso, formato do cofre, mesclagem e limitações
   pwa.md              instruções do pacote instalável (vai junto com ele)
   img/                capturas de tela deste README
 tools/

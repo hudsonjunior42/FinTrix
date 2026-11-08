@@ -665,6 +665,8 @@ addEventListener("unhandledrejection", ev => { try { avisoErro(ev.reason); } cat
 window.fintrixNovaVersao = () => mostrarBarra("versao", "Há uma versão nova do FinTrix pronta.", [["Atualizar agora", "recarregar", true]]);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const rid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+// o mês registrado de uma fixa tem id fixo: confirmado em dois aparelhos sincronizados, vira um lançamento só
+const idFixa = (recorr, recM) => `fx_${recorr}_${recM}`;
 const pad = n => String(n).padStart(2, "0");
 const BRL = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 const fmtR = c => BRL.format((c || 0) / 100); // sempre o valor real (campos de digitação)
@@ -1279,6 +1281,8 @@ function persistTauri() {
     carregar: () => inv("db_todos"),
     gravar: (path, data) => inv("db_gravar", { path, data }),
     lote: ops => inv("db_lote", { ops }),
+    // documentos que a sincronização trouxe de outros aparelhos: [[caminho, dados | null], ...]
+    ouvir: fn => window.__TAURI__.event.listen("db-remoto", ev => fn(ev.payload.map(([path, data]) => ({ path, data })))),
   };
 }
 const nativoTauri = () => !!(window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === "function");
@@ -1360,6 +1364,7 @@ async function localDb(nome, persist) {
     try { canal && canal.postMessage({ path: p, data }); } catch {}
   }
   // vários documentos numa transação só: ou grava tudo, ou nada
+  if (persist.ouvir) persist.ouvir(ops => aplicarLote(ops));
   function aplicarLote(ops) {
     const docs = new Set(), cols = new Set();
     for (const o of ops) { if (o.data === null) cache.delete(o.path); else cache.set(o.path, o.data); docs.add(o.path); cols.add(pai(o.path)); }
@@ -1465,6 +1470,109 @@ async function verChave() {
     <div class="mfoot"><span class="sp"></span><button class="btn pri" data-act="fechar">Fechar</button></div>`, "sm");
 }
 
+/* ---------- sincronização entre aparelhos (app desktop): o Rust faz tudo (fintrix_core::sync); aqui só a tela.
+   Os documentos que chegam de outros aparelhos entram pelo persistTauri().ouvir, como se fossem gravações locais. */
+const invT = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
+function iniciarSync() {
+  S.sync = S.sync || { ligado: false };
+  window.__TAURI__.event.listen("sync-estado", ev => {
+    const mudou = JSON.stringify(ev.payload) !== JSON.stringify(S.sync); S.sync = ev.payload;
+    if (mudou && S.view === "config" && !janelaAberta()) render();
+  });
+  invT("sync_estado").then(e => { S.sync = e; }).catch(() => {});
+  invT("sync_agora", { versao: VERSAO_DADOS }).catch(e => console.warn("sincronização:", e));
+}
+function blocoSync(li) {
+  if (!nativoTauri()) return "";
+  const y = S.sync || {};
+  if (!y.ligado) return li("Sincronização", "Desligada: os dados ficam só neste computador. Ligue para usar o FinTrix em outros aparelhos. Tudo é cifrado aqui antes de sair, para uma pasta sincronizada (Syncthing, Nextcloud) ou um bucket S3 (Cloudflare R2, Backblaze B2).",
+    '<button class="btn sm pri" data-act="sync-criar">Ligar</button><button class="btn sm" data-act="sync-entrar">Entrar num cofre</button>');
+  const outros = y.outros ? plural(y.outros, "outro aparelho", "outros aparelhos") : "nenhum outro aparelho ainda";
+  return li("Sincronização", `Ligada · ${esc(y.destino || "")} · ${outros}${y.ultimo ? ` · última: ${esc(dataHora(y.ultimo))}` : ""}${y.erro ? `<br><span class="warn">${esc(y.erro)}</span>` : ""}`,
+    '<button class="btn sm" data-act="sync-agora">Sincronizar agora</button><button class="btn sm" data-act="sync-codigo">Parear aparelho</button><button class="btn sm ghost" data-act="sync-desligar">Desligar</button>');
+}
+const campoPasta = () => `<div class="f"><label for="sy-p">Pasta</label><div style="display:flex;gap:8px"><input class="inp" id="sy-p" style="flex:1" autocomplete="off" spellcheck="false"><button type="button" class="btn" data-act="sync-escolher">Escolher…</button></div></div>`;
+function abrirSyncCriar() {
+  abrirJanela(`<div class="mhead"><h3>Ligar a sincronização</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>
+    <form class="mbody" id="f-sync">
+      <div class="hint">Os dados deste computador vão para um cofre cifrado. Os outros aparelhos entram nele com o código de pareamento que aparece no fim.</div>
+      <div class="f"><span class="flab">Onde fica o cofre</span>
+        <label class="opc"><input type="radio" name="sy-tipo" value="pasta" checked><span><b>Pasta sincronizada</b><br>Uma pasta que o Syncthing, o Nextcloud ou o Dropbox já leva para os outros aparelhos.</span></label>
+        <label class="opc"><input type="radio" name="sy-tipo" value="s3"><span><b>Bucket S3</b><br>Cloudflare R2, Backblaze B2, AWS ou outro compatível. Crie uma chave de acesso só para este bucket.</span></label></div>
+      <div id="sy-pasta">${campoPasta()}</div>
+      <div id="sy-s3" hidden>
+        <div class="f"><label for="sy-end">Endpoint</label><input class="inp" id="sy-end" placeholder="https://<conta>.r2.cloudflarestorage.com" autocomplete="off" spellcheck="false"><span class="hint">Vazio para a AWS.</span></div>
+        <div class="row2"><div class="f"><label for="sy-bucket">Bucket</label><input class="inp" id="sy-bucket" autocomplete="off" spellcheck="false"></div>
+          <div class="f"><label for="sy-reg">Região</label><input class="inp" id="sy-reg" placeholder="auto" autocomplete="off" spellcheck="false"></div></div>
+        <div class="f"><label for="sy-acc">Access key</label><input class="inp" id="sy-acc" autocomplete="off" spellcheck="false"></div>
+        <div class="f"><label for="sy-sec">Secret key</label><input class="inp" id="sy-sec" type="password" autocomplete="off"></div></div>
+      <div class="err" id="m-err"></div></form>
+    <div class="mfoot"><span class="sp"></span><button class="btn" data-act="fechar">Cancelar</button><button class="btn pri" data-act="sync-criar-ok">Ligar</button></div>`, "sm");
+  $$('[name="sy-tipo"]').forEach(r => r.addEventListener("change", () => { const s3 = $('[name="sy-tipo"]:checked').value === "s3"; $("#sy-s3").hidden = !s3; $("#sy-pasta").hidden = s3; }));
+  $("#f-sync").addEventListener("submit", ev => { ev.preventDefault(); syncCriar(); });
+}
+function destinoDoForm() {
+  const v = id => ($("#" + id)?.value || "").trim();
+  if ($('[name="sy-tipo"]:checked').value === "pasta") return v("sy-p") ? { tipo: "pasta", pasta: v("sy-p") } : null;
+  const d = { tipo: "s3", endpoint: v("sy-end"), bucket: v("sy-bucket"), regiao: v("sy-reg"), access: v("sy-acc"), secret: $("#sy-sec").value };
+  return d.bucket && d.access && d.secret ? d : null;
+}
+async function syncCriar() {
+  const destino = destinoDoForm(), err = $("#m-err"), btn = $('[data-act="sync-criar-ok"]');
+  if (!destino) { err.textContent = "Preencha a pasta, ou o bucket, a access key e a secret key."; return; }
+  btn.disabled = true; err.textContent = ""; btn.textContent = "Ligando…";
+  try { const codigo = await invT("sync_criar", { destino, versao: VERSAO_DADOS }); S.sync = await invT("sync_estado"); syncMostrarCodigo(codigo); }
+  catch (e) { err.textContent = String(e); btn.disabled = false; btn.textContent = "Ligar"; }
+}
+async function syncMostrarCodigo(codigo) {
+  if (!codigo) { try { codigo = await invT("sync_codigo"); } catch (e) { toast(String(e)); return; } }
+  abrirJanela(`<div class="mhead"><h3>Código de pareamento</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>
+    <div class="mbody"><div class="hint">No outro aparelho: Configurações › Seus dados › Sincronização › Entrar num cofre (ou, num aparelho novo, "Usar os dados de outro aparelho"), e cole este código.</div>
+      <div class="hint warn" style="margin-top:8px">O código tem a chave do cofre e o acesso ao destino: quem tiver o código lê seus dados. Não mande por e-mail ou mensagem; copie de um aparelho para o outro e não guarde junto com backups.</div>
+      <textarea class="inp num" id="sy-cod" readonly rows="5" style="margin-top:12px;width:100%;word-break:break-all">${esc(codigo)}</textarea></div>
+    <div class="mfoot"><span class="sp"></span><button class="btn" data-act="sync-copiar">Copiar</button><button class="btn pri" data-act="fechar">Fechar</button></div>`, "sm");
+}
+async function syncCopiar() {
+  const t = $("#sy-cod"); if (!t) return;
+  try { await navigator.clipboard.writeText(t.value); toast("Código copiado"); } catch { t.select(); toast("Selecionado: use Ctrl+C"); }
+}
+function abrirSyncEntrar() {
+  abrirJanela(`<div class="mhead"><h3>Entrar num cofre</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>
+    <form class="mbody" id="f-sync-e">
+      <div class="hint">Cole o código de pareamento que aparece no outro aparelho (Configurações › Seus dados › Sincronização › Parear aparelho).</div>
+      ${S.cfg ? `<div class="hint warn" style="margin-top:8px">Os dados deste computador serão trocados pelos do cofre. Antes, o app guarda uma cópia automática deles.</div>` : ""}
+      <div class="f"><label for="sy-cod-in">Código de pareamento</label><textarea class="inp num" id="sy-cod-in" rows="4" autocomplete="off" spellcheck="false"></textarea></div>
+      ${campoPasta().replace('>Pasta<', '>Pasta do cofre neste computador (só se o cofre for uma pasta)<')}
+      <div class="err" id="m-err"></div></form>
+    <div class="mfoot"><span class="sp"></span><button class="btn" data-act="fechar">Cancelar</button><button class="btn pri" data-act="sync-entrar-ok">Entrar</button></div>`, "sm");
+  $("#f-sync-e").addEventListener("submit", ev => { ev.preventDefault(); syncEntrar(); });
+  $("#sy-cod-in").focus();
+}
+async function syncEntrar() {
+  const codigo = $("#sy-cod-in").value.trim(), err = $("#m-err"), btn = $('[data-act="sync-entrar-ok"]');
+  if (!codigo) { err.textContent = "Cole o código de pareamento."; return; }
+  btn.disabled = true; err.textContent = ""; btn.textContent = "Entrando…";
+  try {
+    if (S.cfg) await guardarCopia("Antes de entrar num cofre de sincronização");
+    await invT("sync_entrar", { codigo, pasta: ($("#sy-p")?.value || "").trim() || null, versao: VERSAO_DADOS });
+    location.reload();
+  } catch (e) { err.textContent = String(e); btn.disabled = false; btn.textContent = "Entrar"; }
+}
+async function syncEscolherPasta() {
+  try { const p = await invT("escolher_pasta"); if (p) $("#sy-p").value = p; } catch (e) { toast(String(e)); }
+}
+async function syncAgora() {
+  msgDados("Sincronizando…");
+  try {
+    const r = await invT("sync_agora", { versao: VERSAO_DADOS });
+    msgDados(r.alterados ? `Pronto: ${plural(r.alterados, "registro atualizado", "registros atualizados")} de outros aparelhos.` : "Pronto: tudo em dia.");
+  } catch (e) { msgDados(String(e)); }
+}
+async function syncDesligar() {
+  try { S.sync = await invT("sync_desligar"); render(); toast("Sincronização desligada neste computador. Os dados continuam aqui e no cofre."); }
+  catch (e) { toast(String(e)); }
+}
+
 async function boot() {
   const modo = escolherBackend();
   let b;
@@ -1472,6 +1580,7 @@ async function boot() {
   catch (e) { console.error(e); S.fase = modo === "local" ? "sem-local" : "erro"; render(); return; }
   if (b.erro) { S.fase = b.erro; render(); return; }
   S.modo = b.modo; S.db = b.db; S.uid = b.uid; S.dl = b.dl;
+  if (nativoTauri()) iniciarSync();
   S.root = S.db.doc(`data/users/${S.uid}/livro`);
   const comPrazo = (p, ms, v) => Promise.race([p, new Promise(r => setTimeout(() => r(v), ms))]);
   S.sisOk = await comPrazo(sisDb().then(() => true, e => { console.warn("sem armazenamento do sistema", e); return false; }), 2500, false);
@@ -1680,6 +1789,7 @@ function renderOnboarding(el) {
     <div class="onb-acoes">
       <button class="btn pri lg" data-act="onb-conta">Adicionar conta</button>
       <button class="btn lg" data-act="onb-restaurar">Restaurar um backup</button>
+      ${nativoTauri() ? '<button class="btn lg" data-act="sync-entrar">Usar os dados de outro aparelho</button>' : ""}
       ${COPIAS.n ? `<button class="btn ghost onb-copias" data-act="copias">Recuperar uma cópia automática</button>` : ""}
       <input type="file" id="imp-json" accept=".json,application/json" class="sr" tabindex="-1" aria-hidden="true">
       <div class="hint onb-nota">${S.modo === "local" ? (nativoTauri() ? "Os dados ficam neste computador, num banco cifrado." : "Os dados ficam guardados neste navegador.") : "Os dados ficam salvos na sua conta claude.ai."}</div>
@@ -2383,7 +2493,7 @@ function blocoDados() {
     : local ? li("Proteção contra limpeza automática", `${PERSIST.ok ? "Ativa: o navegador não apaga os dados sozinho para liberar espaço." : "Não concedida: com pouco espaço em disco, o navegador pode apagar os dados. Instalar o app ou adicioná-lo aos favoritos costuma liberar."}${PERSIST.uso != null ? ` Uso atual: ${tamTxt(PERSIST.uso)}.` : ""}`, PERSIST.ok ? "" : '<button class="btn sm" data-act="persistir">Pedir de novo</button>') : "";
   const copias = S.sisOk ? li(`Cópias automáticas ${aqui()}`, COPIAS.n ? `${COPIAS.n} guardada${COPIAS.n === 1 ? "" : "s"}. A mais recente: ${esc(COPIAS.ult.motivo.charAt(0).toLowerCase() + COPIAS.ult.motivo.slice(1))}, ${esc(dataHora(COPIAS.ult.quando))}.` : "Nenhuma ainda. O app guarda uma antes de restaurar um backup, atualizar o formato dos dados ou apagar tudo.", COPIAS.n ? '<button class="btn sm" data-act="copias">Ver</button>' : "") : "";
   return `<section class="panel"><div class="panel-h"><h2>Seus dados</h2></div>
-        <div class="list dados-st">${li("Último backup", ult)}${pasta}${prot}${copias}${blocoAnexos()}</div>
+        <div class="list dados-st">${li("Último backup", ult)}${blocoSync(li)}${pasta}${prot}${copias}${blocoAnexos()}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" data-act="importar">Importar extrato ou fatura</button><button class="btn" data-act="exp-csv">Exportar planilha (CSV)</button><button class="btn" data-act="exp-json">${tx("Baixar backup", "Salvar backup")}</button>
         <label class="btn" for="imp-json" style="cursor:pointer">Restaurar backup</label><input type="file" id="imp-json" accept=".json,application/json" class="sr"></div>
         <div class="hint" style="margin-top:8px">${local ? (nativoTauri() ? "Os dados ficam só neste computador, num banco cifrado." : "Os dados ficam só neste navegador, neste aparelho.") : "Os dados ficam na sua conta claude.ai."} O CSV abre no OnlyOffice e no Excel (separador ponto e vírgula).</div>
@@ -3689,7 +3799,7 @@ async function salvarLanc(novo) {
   const btns = $$('[data-act="m-salvar"]'); btns.forEach(b => b.disabled = true);
   try {
     if (MS.virtual) {
-      await lancSave({ ...base, id: rid(), recorr: e.recorr, recM: e.recM, criado: Date.now() });
+      await lancSave({ ...base, id: idFixa(e.recorr, e.recM), recorr: e.recorr, recM: e.recM, criado: Date.now() });
     } else if (MS.edit) {
       const sc = ($('input[name="m-sc"]:checked') || {}).value || "esta";
       const novoL = { ...e, ...base, id: e.id, criado: e.criado || Date.now() };
@@ -3971,7 +4081,7 @@ function acharItem(id) {
 async function marcarPago(id, pago) {
   const l = acharItem(id); if (!l) return;
   try {
-    if (l.virtual) { await lancSave({ ...limpo(l), id: rid(), pago: true, criado: Date.now() }); toast("Registrado como pago"); }
+    if (l.virtual) { await lancSave({ ...limpo(l), id: idFixa(l.recorr, l.recM), pago: true, criado: Date.now() }); toast("Registrado como pago"); }
     else { await lancRef(l).update({ pago }); toast(pago ? (l.tipo === "receita" ? "Marcado como recebido" : "Marcado como pago") : "Marcado como pendente"); }
   } catch (ex) { falha(ex); }
 }
@@ -4505,6 +4615,10 @@ const A = {
   persistir: () => pedirPersistencia(),
   recarregar: () => location.reload(),
   "chave-ver": () => verChave(),
+  "sync-criar": () => abrirSyncCriar(), "sync-criar-ok": () => syncCriar(),
+  "sync-entrar": () => abrirSyncEntrar(), "sync-entrar-ok": () => syncEntrar(),
+  "sync-escolher": () => syncEscolherPasta(), "sync-codigo": () => syncMostrarCodigo(), "sync-copiar": () => syncCopiar(),
+  "sync-agora": () => syncAgora(), "sync-desligar": () => syncDesligar(),
   "seg-geral": () => { S.view = "geral"; lsSet("view", "geral"); fecharJanela(); render(); },
   "copiar-erro": async () => { try { await navigator.clipboard.writeText(ULT_ERRO); toast("Detalhes copiados"); } catch { toast("Não foi possível copiar."); } },
   "ver-erro": () => abrirJanela(`<div class="mhead t-despesa"><h3>Detalhes do erro</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>

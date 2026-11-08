@@ -1,9 +1,18 @@
 //! Armazenamento do FinTrix: documentos JSON identificados por caminho
 //! (`data/users/local/livro/l2026/<id>`), num SQLite cifrado com SQLCipher.
 //! É o mesmo modelo que a interface usa no navegador (veja `Backends` em index.html).
+//!
+//! Cada gravação também atualiza a tabela `campos` (uma linha por folha do JSON, com carimbo), que é o
+//! que a sincronização troca entre aparelhos (veja `campos` e `sync`).
 
+pub mod campos;
+pub mod sync;
+
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Mutex;
+
+use campos::{achatar, agora_ms, ler_carimbo, remontar, Relogio};
 
 use rusqlite::{params, Connection};
 use serde::Deserialize;
@@ -21,6 +30,8 @@ pub enum Erro {
     Aleatorio(String),
     #[error("estado interno bloqueado")]
     Bloqueado,
+    #[error("{0}")]
+    Sync(String),
 }
 
 pub type Resultado<T> = Result<T, Erro>;
@@ -40,8 +51,22 @@ pub struct Item {
     pub bytes: Option<i64>,
 }
 
+/// Um campo como vai para os outros aparelhos: valor None = apagado.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, Deserialize)]
+pub struct Campo {
+    pub path: String,
+    pub campo: String,
+    pub valor: Option<Value>,
+    pub carimbo: String,
+}
+
+/// Caminho do documento de configuração e coleções de lançamentos por ano (`.../livro/l2026/<id>`).
+pub const CONFIG: &str = "data/users/local/livro";
+
 pub struct Store {
     conn: Mutex<Connection>,
+    relogio: Mutex<Relogio>,
+    aparelho: String,
 }
 
 /// Gera uma chave aleatória de 256 bits em hexadecimal (64 caracteres).
@@ -76,9 +101,88 @@ impl Store {
                  valor TEXT NOT NULL,
                  bytes BLOB,
                  PRIMARY KEY (loja, chave)
-             );",
+             );
+             -- folhas dos documentos com carimbo (valor NULL = apagado), base da sincronização
+             CREATE TABLE IF NOT EXISTS campos (
+                 path TEXT NOT NULL,
+                 campo TEXT NOT NULL,
+                 valor TEXT,
+                 carimbo TEXT NOT NULL,
+                 PRIMARY KEY (path, campo)
+             );
+             -- id deste aparelho, configuração da sincronização e o que já foi visto/enviado
+             CREATE TABLE IF NOT EXISTS meta (chave TEXT PRIMARY KEY, valor TEXT NOT NULL);",
         )?;
-        Ok(Self { conn: Mutex::new(conn) })
+        let aparelho = match conn.query_row("SELECT valor FROM meta WHERE chave = 'aparelho'", [], |r| r.get::<_, String>(0)) {
+            Ok(a) => a,
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                let a = gerar_chave()?[..16].to_string();
+                conn.execute("INSERT INTO meta (chave, valor) VALUES ('aparelho', ?1)", params![a])?;
+                a
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let s = Self { conn: Mutex::new(conn), relogio: Mutex::new(Relogio::default()), aparelho };
+        s.semear_campos()?;
+        Ok(s)
+    }
+
+    /// Id aleatório deste aparelho (aparece nos carimbos e no nome do arquivo de estado).
+    pub fn aparelho(&self) -> &str {
+        &self.aparelho
+    }
+
+    fn novo_carimbo(&self) -> Resultado<String> {
+        Ok(self.relogio.lock().map_err(|_| Erro::Bloqueado)?.novo(&self.aparelho))
+    }
+
+    /// Bancos de antes da sincronização: cria os campos a partir dos documentos, uma vez.
+    fn semear_campos(&self) -> Resultado<()> {
+        let tem: i64 = self.com_conn(|c| Ok(c.query_row("SELECT count(*) FROM campos", [], |r| r.get(0))?))?;
+        if tem > 0 {
+            return Ok(());
+        }
+        let docs = self.todos()?;
+        if docs.is_empty() {
+            return Ok(());
+        }
+        let h = self.novo_carimbo()?;
+        let mut conn = self.conn.lock().map_err(|_| Erro::Bloqueado)?;
+        let tx = conn.transaction()?;
+        for (p, d) in docs {
+            for (campo, v) in achatar(&d) {
+                tx.execute("INSERT INTO campos (path, campo, valor, carimbo) VALUES (?1, ?2, ?3, ?4)", params![p, campo, serde_json::to_string(&v)?, h])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn meta(&self, chave: &str) -> Resultado<Option<String>> {
+        self.com_conn(|c| match c.query_row("SELECT valor FROM meta WHERE chave = ?1", params![chave], |r| r.get(0)) {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        })
+    }
+
+    /// valor None apaga a chave
+    pub fn definir_meta(&self, chave: &str, valor: Option<&str>) -> Resultado<()> {
+        self.com_conn(|c| {
+            match valor {
+                Some(v) => c.execute("INSERT INTO meta (chave, valor) VALUES (?1, ?2) ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor", params![chave, v])?,
+                None => c.execute("DELETE FROM meta WHERE chave = ?1", params![chave])?,
+            };
+            Ok(())
+        })
+    }
+
+    /// Apaga as chaves de meta que começam com o prefixo (ex.: o que foi visto de um cofre).
+    pub fn limpar_meta(&self, prefixo: &str) -> Resultado<()> {
+        self.com_conn(|c| {
+            c.execute("DELETE FROM meta WHERE substr(chave, 1, length(?1)) = ?1", params![prefixo])?;
+            Ok(())
+        })
     }
 
     fn com_conn<T>(&self, f: impl FnOnce(&Connection) -> Resultado<T>) -> Resultado<T> {
@@ -193,26 +297,204 @@ impl Store {
     }
 
     /// Várias gravações numa transação só: ou grava tudo, ou nada.
+    /// Os campos que mudaram (e os que sumiram, como apagados) ganham um carimbo novo.
     pub fn lote(&self, ops: &[Op]) -> Resultado<()> {
+        let h = self.novo_carimbo()?;
         let mut conn = self.conn.lock().map_err(|_| Erro::Bloqueado)?;
         let tx = conn.transaction()?;
         for o in ops {
-            match &o.data {
-                None => {
-                    tx.execute("DELETE FROM docs WHERE path = ?1", params![o.path])?;
-                }
-                Some(v) => {
-                    tx.execute(
-                        "INSERT INTO docs (path, json, atualizado_em) VALUES (?1, ?2, strftime('%s','now'))
-                         ON CONFLICT(path) DO UPDATE SET json = excluded.json, atualizado_em = excluded.atualizado_em",
-                        params![o.path, serde_json::to_string(v)?],
-                    )?;
-                }
-            }
+            gravar_campos(&tx, &o.path, o.data.as_ref(), &h)?;
+            gravar_doc(&tx, &o.path, o.data.as_ref())?;
         }
         tx.commit()?;
         Ok(())
     }
+
+    /// Todos os campos (inclusive apagados): o estado que este aparelho envia.
+    pub fn campos_todos(&self) -> Resultado<Vec<Campo>> {
+        self.com_conn(|c| {
+            let mut st = c.prepare("SELECT path, campo, valor, carimbo FROM campos ORDER BY path, campo")?;
+            let linhas = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?)))?;
+            let mut out = Vec::new();
+            for l in linhas {
+                let (path, campo, v, carimbo) = l?;
+                out.push(Campo { path, campo, valor: v.map(|v| serde_json::from_str(&v)).transpose()?, carimbo });
+            }
+            Ok(out)
+        })
+    }
+
+    /// Maior carimbo gravado por ESTE aparelho (para saber se há algo novo a enviar).
+    pub fn ultimo_carimbo_local(&self) -> Resultado<Option<String>> {
+        let fim = format!("-{}", self.aparelho);
+        self.com_conn(|c| {
+            Ok(c.query_row("SELECT max(carimbo) FROM campos WHERE substr(carimbo, -length(?1)) = ?1", params![fim], |r| r.get(0))?)
+        })
+    }
+
+    /// Junta campos vindos de outro aparelho: em cada campo fica o carimbo maior. Carimbos mais de um dia
+    /// no futuro são ignorados (relógio errado não pode "ganhar" para sempre).
+    /// Devolve os documentos que mudaram aqui, já remontados (None = apagado), para avisar a interface.
+    pub fn mesclar(&self, remotos: &[Campo]) -> Resultado<Vec<(String, Option<Value>)>> {
+        let limite = agora_ms() + 24 * 3600 * 1000;
+        let mut tocados = BTreeSet::new();
+        let mut maior = String::new();
+        {
+            let mut conn = self.conn.lock().map_err(|_| Erro::Bloqueado)?;
+            let tx = conn.transaction()?;
+            for r in remotos {
+                if !ler_carimbo(&r.carimbo).is_some_and(|(ms, _)| ms <= limite) {
+                    continue;
+                }
+                let local: Option<String> = match tx.query_row("SELECT carimbo FROM campos WHERE path = ?1 AND campo = ?2", params![r.path, r.campo], |x| x.get(0)) {
+                    Ok(h) => Some(h),
+                    Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                    Err(e) => return Err(e.into()),
+                };
+                if local.as_deref().is_some_and(|l| l >= r.carimbo.as_str()) {
+                    continue;
+                }
+                let v = r.valor.as_ref().map(serde_json::to_string).transpose()?;
+                tx.execute(
+                    "INSERT INTO campos (path, campo, valor, carimbo) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(path, campo) DO UPDATE SET valor = excluded.valor, carimbo = excluded.carimbo",
+                    params![r.path, r.campo, v, r.carimbo],
+                )?;
+                tocados.insert(r.path.clone());
+                if r.carimbo > maior {
+                    maior = r.carimbo.clone();
+                }
+            }
+            tx.commit()?;
+        }
+        if !maior.is_empty() {
+            self.relogio.lock().map_err(|_| Erro::Bloqueado)?.observar(&maior);
+        }
+        let mut mudou = Vec::new();
+        {
+            let mut conn = self.conn.lock().map_err(|_| Erro::Bloqueado)?;
+            let tx = conn.transaction()?;
+            for p in &tocados {
+                let novo = remontar(&folhas_vivas(&tx, p)?);
+                if ler_doc(&tx, p)? != novo {
+                    gravar_doc(&tx, p, novo.as_ref())?;
+                    mudou.push((p.clone(), novo));
+                }
+            }
+            tx.commit()?;
+        }
+        mudou.extend(self.conferir_anos()?);
+        Ok(mudou)
+    }
+
+    /// A interface só carrega os anos listados em `anos` na configuração. Dois aparelhos que criaram anos
+    /// diferentes ao mesmo tempo perderiam um deles (a lista vale inteira), então os anos com lançamentos
+    /// entram de volta na lista aqui.
+    fn conferir_anos(&self) -> Resultado<Vec<(String, Option<Value>)>> {
+        let Some(mut cfg) = self.com_conn(|c| ler_doc(c, CONFIG))? else { return Ok(vec![]) };
+        let prefixo = format!("{CONFIG}/l");
+        let com_dados: BTreeSet<String> = self.com_conn(|c| {
+            let mut st = c.prepare("SELECT DISTINCT substr(path, length(?1) + 1, 4) FROM docs WHERE substr(path, 1, length(?1)) = ?1")?;
+            let r = st.query_map(params![prefixo], |r| r.get::<_, String>(0))?.collect::<Result<_, _>>()?;
+            Ok(r)
+        })?;
+        let mut anos: BTreeSet<String> = cfg["anos"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        let antes = anos.len();
+        anos.extend(com_dados.into_iter().filter(|a| a.len() == 4 && a.chars().all(|c| c.is_ascii_digit())));
+        if anos.len() == antes {
+            return Ok(vec![]);
+        }
+        cfg["anos"] = Value::from(anos.into_iter().collect::<Vec<_>>());
+        self.gravar(CONFIG, Some(&cfg))?;
+        Ok(vec![(CONFIG.to_string(), Some(cfg))])
+    }
+
+    /// Para entrar num cofre: tira daqui todos os documentos e campos (os do cofre chegam na mesclagem).
+    /// Comprovantes ficam; os do cofre são baixados.
+    pub fn esvaziar_documentos(&self) -> Resultado<()> {
+        self.com_conn(|c| {
+            c.execute_batch("DELETE FROM docs; DELETE FROM campos;")?;
+            Ok(())
+        })
+    }
+}
+
+fn ler_doc(c: &Connection, path: &str) -> Resultado<Option<Value>> {
+    match c.query_row("SELECT json FROM docs WHERE path = ?1", params![path], |r| r.get::<_, String>(0)) {
+        Ok(j) => Ok(Some(serde_json::from_str(&j)?)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn gravar_doc(c: &Connection, path: &str, data: Option<&Value>) -> Resultado<()> {
+    match data {
+        None => c.execute("DELETE FROM docs WHERE path = ?1", params![path])?,
+        Some(v) => c.execute(
+            "INSERT INTO docs (path, json, atualizado_em) VALUES (?1, ?2, strftime('%s','now'))
+             ON CONFLICT(path) DO UPDATE SET json = excluded.json, atualizado_em = excluded.atualizado_em",
+            params![path, serde_json::to_string(v)?],
+        )?,
+    };
+    Ok(())
+}
+
+fn folhas_vivas(c: &Connection, path: &str) -> Resultado<BTreeMap<String, (Value, String)>> {
+    let mut st = c.prepare("SELECT campo, valor, carimbo FROM campos WHERE path = ?1 AND valor IS NOT NULL")?;
+    let linhas = st.query_map(params![path], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+    let mut out = BTreeMap::new();
+    for l in linhas {
+        let (campo, v, h) = l?;
+        out.insert(campo, (serde_json::from_str(&v)?, h));
+    }
+    Ok(out)
+}
+
+/// Unidade de mesclagem de um campo: dentro dela vale a última gravação inteira, e unidades diferentes se
+/// juntam. Lançamento = o documento todo. Configuração = cada registro (`contas/<id>`, `cartoes/<id>`,
+/// `recorr/<id>`…) ou cada chave simples (`anos`, `versao`). Assim, apagar uma conta num aparelho e editar
+/// o nome dela no outro nunca deixa uma conta pela metade (só com o nome).
+pub fn unidade<'a>(path: &str, campo: &'a str) -> &'a str {
+    if path != CONFIG {
+        return "";
+    }
+    match campo.match_indices('/').nth(1) {
+        Some((i, _)) => &campo[..i],
+        None => campo,
+    }
+}
+
+fn na_unidade(u: &str, campo: &str) -> bool {
+    u.is_empty() || campo == u || (campo.starts_with(u) && campo.as_bytes().get(u.len()) == Some(&b'/'))
+}
+
+/// Compara as folhas novas com as vivas. Toda unidade com alguma diferença é carimbada inteira
+/// (folhas que ficaram e que mudaram); folhas que sumiram viram apagadas.
+fn gravar_campos(c: &Connection, path: &str, data: Option<&Value>, h: &str) -> Resultado<()> {
+    let antes = folhas_vivas(c, path)?;
+    let depois = data.map(achatar).unwrap_or_default();
+    let mut mudadas: BTreeSet<String> = BTreeSet::new();
+    for (campo, v) in &depois {
+        if antes.get(campo).map(|(a, _)| a) != Some(v) {
+            mudadas.insert(unidade(path, campo).to_string());
+        }
+    }
+    for campo in antes.keys().filter(|k| !depois.contains_key(*k)) {
+        mudadas.insert(unidade(path, campo).to_string());
+    }
+    for (campo, v) in &depois {
+        if mudadas.iter().any(|u| na_unidade(u, campo)) {
+            c.execute(
+                "INSERT INTO campos (path, campo, valor, carimbo) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(path, campo) DO UPDATE SET valor = excluded.valor, carimbo = excluded.carimbo",
+                params![path, campo, serde_json::to_string(v)?, h],
+            )?;
+        }
+    }
+    for campo in antes.keys().filter(|k| !depois.contains_key(*k)) {
+        c.execute("UPDATE campos SET valor = NULL, carimbo = ?3 WHERE path = ?1 AND campo = ?2", params![path, campo, h])?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
