@@ -5,7 +5,7 @@
 <h1 align="center">FinTrix</h1>
 
 <p align="center">Controle financeiro pessoal: contas, cartões, faturas, orçamento e relatórios.<br>
-Um app web em um arquivo só, sem instalação e sem servidor.</p>
+Um app web em um arquivo só, sem instalação e sem servidor, e um app desktop (protótipo) com os dados cifrados.</p>
 
 <p align="center">
   <img src="docs/img/visao-geral.png" alt="Visão geral do FinTrix no tema escuro: saldos, contas a pagar, gastos por categoria e cartões" width="820">
@@ -33,21 +33,37 @@ Um app web em um arquivo só, sem instalação e sem servidor.</p>
 O app inteiro é o [`index.html`](index.html).
 Também pode ser acessado a partir de https://hudsonjunior42.github.io/FinTrix/
 
+### App desktop (protótipo)
+
+O mesmo app como programa para Linux, feito com [Tauri 2](https://tauri.app): a interface é o `index.html` e a parte em Rust guarda os dados.
+
+- **Dados cifrados no computador.** Lançamentos, comprovantes e cópias automáticas ficam num SQLite cifrado com SQLCipher. A chave é aleatória e fica no chaveiro do sistema (gnome-keyring ou KWallet), nunca num arquivo.
+- **Pacotes:** AppImage (qualquer distribuição) e .deb (Debian e Ubuntu). Gere com os comandos em [Desenvolvimento](#app-desktop-tauri).
+- **Para trazer os dados** do navegador ou do claude.ai: baixe um backup lá e use *Restaurar um backup* no app desktop.
+- **Ainda é protótipo:** testado só no Linux, sem sincronização entre aparelhos. Detalhes e limitações em [docs/desktop-tauri.md](docs/desktop-tauri.md). A versão Android é a próxima fase.
+
 ## Estrutura
 
 ```
 index.html            o app completo (HTML, CSS e JavaScript num arquivo só)
 assets/               logo (SVG e PNG)
+Cargo.toml            workspace Rust do app desktop
+crates/fintrix-core/  armazenamento cifrado (SQLCipher) usado pelo app desktop
+src-tauri/            casca Tauri: janela, chave no chaveiro do sistema, ícones e configuração dos pacotes
 docs/
   especificacao.md    regras e decisões do app (fonte de verdade para mudanças)
   rodar-localmente.md uso fora do claude.ai e migração dos dados
+  desktop-tauri.md    app desktop: como funciona, limitações, testes e pacotes
   pwa.md              instruções do pacote instalável (vai junto com ele)
   img/                capturas de tela deste README
 tools/
   pwa_build.py        gera o pacote instalável (PWA) em dist/pwa/
+  tauri_prep.py       copia o app web para dist/tauri/, a pasta que o Tauri empacota
   capturas.py         gera as capturas de tela de docs/img/ com dados fictícios
 test/
   ui/                 testes de interface com banco simulado (um arquivo por funcionalidade)
+  desktop.py          testa o app desktop pela interface (dados, comprovantes, chave errada, nada em claro)
+  desktop/            roteiros que o app desktop executa durante esse teste
   v1.py, v11.py       testes de integração das versões 1.0 e 1.1 (segurança dos dados, importação, migração)
   regressao.py        compara duas versões do app com a mesma base grande
   pwa_v1.py           testa o pacote instalável (offline, atualização)
@@ -59,6 +75,20 @@ test/
 - **Camada de dados.** Todo acesso a dados passa pelo bloco "camada de dados" no início do script (`Backends.local`). Para hospedar com sincronização própria (PocketBase, Supabase…), basta acrescentar outro backend que cumpra o mesmo contrato.
 - **Valores em centavos** (inteiros), datas `AAAA-MM-DD` e meses `AAAA-MM`.
 - **Testes** com Playwright (Python). Como instalar e rodar: [test/README.md](test/README.md).
+
+### App desktop (Tauri)
+
+Precisa de Rust ([rustup](https://rustup.rs)), `webkit2gtk-4.1`, `gtk3`, `openssl` e as ferramentas de compilação (`base-devel` no Arch, `build-essential` no Debian/Ubuntu).
+
+```bash
+cargo install tauri-cli --version "^2" --locked   # uma vez
+cargo tauri dev                                   # abre o app em modo de desenvolvimento
+cargo test -p fintrix-core                        # testes do armazenamento cifrado
+python3 test/desktop.py                           # testa o app pela interface (precisa de tela)
+cargo tauri build --bundles appimage,deb          # pacotes em target/release/bundle/
+```
+
+O `index.html` continua funcionando sozinho no navegador: dentro do app desktop ele usa o armazenamento do Rust, e fora dele o IndexedDB, como antes.
 
 ### Versão instalável (PWA)
 
