@@ -2937,7 +2937,7 @@ function blocoAnexos() {
   return `<div class="li"><div class="grow"><div class="t1">Comprovantes</div><div class="t2">${!a.pronto ? "Contando…" : a.n ? `${plural(a.n, "arquivo", "arquivos")} · ${tamTxt(a.tam)}. Ficam neste aparelho e não entram no backup .json: use o .zip${pastaSuportada() ? " ou o backup automático, que copia os comprovantes para a pasta" : ""}.` : "Nenhum ainda. Anexe fotos ou PDFs em Mais opções, na janela do lançamento."}
       ${a.faltam ? `<br><span class="warn">${plural(a.faltam, "comprovante não está", "comprovantes não estão")} neste aparelho.</span> Restaure o .zip${BK.pasta ? " ou recupere da pasta do backup" : ""}.` : ""}
       ${a.orfaos.length ? `<br>${plural(a.orfaos.length, "arquivo sem lançamento", "arquivos sem lançamento")} (de lançamentos apagados).` : ""}</div></div>
-    <div class="acoes">${a.n ? '<button class="btn sm" data-act="anx-zip">${tx("Baixar .zip", "Salvar .zip")}</button>' : ""}<label class="btn sm" for="imp-zip" style="cursor:pointer">Restaurar .zip</label><input type="file" id="imp-zip" accept=".zip,application/zip" class="sr">
+    <div class="acoes">${a.n ? `<button class="btn sm" data-act="anx-zip">${tx("Baixar .zip", "Salvar .zip")}</button>` : ""}<label class="btn sm" for="imp-zip" style="cursor:pointer">Restaurar .zip</label><input type="file" id="imp-zip" accept=".zip,application/zip" class="sr">
       ${a.faltam && BK.pasta ? '<button class="btn sm" data-act="anx-pasta">Recuperar da pasta</button>' : ""}${a.orfaos.length ? '<button class="btn sm ghost" data-act="anx-orfaos">Apagar sem lançamento</button>' : ""}</div></div>`;
 }
 
