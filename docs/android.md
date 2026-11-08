@@ -1,117 +1,92 @@
-# Plano: app Android
+# App Android
 
-O Tauri 2 gera app Android a partir do mesmo projeto (`cargo tauri android init|dev|build`). A ideia é a mesma do desktop: o `index.html` roda na WebView do sistema, o Rust (`fintrix-core`) guarda os dados num SQLite cifrado e sincroniza pelo mesmo cofre. Assim o celular entra no cofre do computador com o código de pareamento ("Parear com outro aparelho" na apresentação) e os dois ficam iguais.
+O mesmo projeto do desktop (Tauri 2) gera o app Android: o `index.html` roda na WebView do sistema, e o Rust (`fintrix-core`) guarda os dados num SQLite cifrado e sincroniza pelo mesmo cofre. O celular entra no cofre do computador lendo o QR code do pareamento, e os dois ficam iguais. As diferenças que a pessoa vê estão em [especificacao.md](especificacao.md) ("App Android").
 
-O que já serve sem mudança: a interface (já funciona em 380 px, com toque, e já respeita as áreas seguras com `viewport-fit=cover` e `env(safe-area-inset-*)`), o formato dos dados, a mesclagem e a cifra do cofre (`sync.rs`), e o pareamento.
+Feito em nov/2026 e conferido num Redmi Note 11 (Android 13, arm64). Dois apps no celular:
 
-## Decisões (nov/2026)
-
-- **Testes num celular real** pela depuração USB (`adb`). Esta máquina não tem `/dev/kvm`, então o emulador seria lento demais; se a virtualização for ligada na BIOS, o emulador x86_64 entra depois.
-- **Ambiente pelo Android Studio** (traz o JDK, o SDK Manager e o NDK).
-- **Sincronização no Android só por bucket S3** na primeira versão; pasta pelo seletor do sistema (SAF) fica para depois (item 3).
-- **Distribuição por APK assinado no GitHub Releases.** F-Droid e Play Store ficam para depois.
-
-## 0. Ambiente
-
-Esta máquina já tem o `adb` (pacote `android-tools`) e o `tauri-cli` 2.12; falta o resto:
-
-- Android Studio → SDK Manager: Android SDK Platform 37 (o `compileSdk`/`targetSdk` do modelo do tauri-cli 2.12; o `minSdk` é 24, então roda do Android 7 em diante), Build-Tools, Platform-Tools, NDK (Side by side) 26+ e Command-line Tools. Variáveis (no fish, em `~/.config/fish/config.fish`): `JAVA_HOME` (o JBR do Android Studio, `…/android-studio/jbr`), `ANDROID_HOME=~/Android/Sdk`, `NDK_HOME=$ANDROID_HOME/ndk/<versão>`.
-- Alvos Rust: `rustup target add aarch64-linux-android armv7-linux-androideabi` (celulares atuais são aarch64; o armv7 cobre os antigos). O `x86_64-linux-android` só se o emulador entrar.
-- No celular: opções do desenvolvedor → depuração USB; `adb devices` precisa listar o aparelho.
-- `cargo tauri android init` cria `src-tauri/gen/android/` (projeto Gradle). Vai para o git, com o ícone e o nome do app ajustados. Ícones: `python3 tools/icones_android.py` gera o ícone adaptativo (logo de `assets/logo.svg` dentro da área segura, fundo `#0E1117`), a camada monocromática (ícones temáticos do Android 13+) e os PNGs antigos; o fundo da abertura segue o tema do sistema (`values*/fundo.xml`).
-
-## 1. Compilar o núcleo para Android
-
-| Ponto | Problema | Saída |
+| | Release | Debug |
 |---|---|---|
-| SQLCipher | `bundled-sqlcipher` usa o OpenSSL do sistema, que não existe no NDK | trocar para `bundled-sqlcipher-vendored-openssl` só no alvo Android (`[target.'cfg(target_os = "android")'.dependencies]`), ou compilar o SQLCipher com a cripto do próprio Rust se o OpenSSL vendorizado der trabalho no NDK |
-| S3 (`object_store` + `reqwest`/rustls) | `rustls-native-certs` não acha os certificados do Android | usar as raízes do `webpki-roots` (ou `rustls-platform-verifier`) no Android; conferir com um bucket de teste |
-| `getrandom`, `chacha20poly1305`, `flate2` | nada | funcionam no Android |
+| Nome | FinTrix | FinTrix (teste) |
+| Id | `io.github.hudsonjunior42.fintrix` | `io.github.hudsonjunior42.fintrix.debug` |
+| Assinatura | chave em `~/.config/fintrix/` | chave de debug do Android Studio |
+| Dados | os de verdade: **não mexer em testes** | só de teste; DevTools e `run-as` ligados |
 
-Primeiro marco: `cargo build -p fintrix-core --target aarch64-linux-android` e `cargo test -p fintrix-core` no host continuam passando.
+## Ambiente
 
-## 2. A casca Tauri no celular (`src-tauri/src/lib.rs`)
-
-- **Ponto de entrada**: mover o `main()` para `lib.rs` com `#[cfg_attr(mobile, tauri::mobile_entry_point)] pub fn run()`, e o `main.rs` só chama `run()`. `Cargo.toml` ganha `[lib] crate-type = ["staticlib", "cdylib", "rlib"]`.
-- **Janela**: no celular não existem `inner_size`, `min_inner_size`, ícone nem `data_directory`; separar com `#[cfg(desktop)]`. `glib::set_prgname` e `registrar_atalho` já são só Linux.
-- **Chave do banco** (feito): o crate `keyring` não tem Android. `ChavePlugin.kt` (em `gen/android/app/src/main/java/…`) guarda a chave em `no_backup/chave-do-banco.bin`, cifrada com AES-GCM por uma chave do **Android Keystore** (`fintrix-chave-do-banco`, não exportável). O Rust chama o plugin em `chaveiro::ler`/`guardar` (`lib.rs`); o plugin não tem manifesto de permissões, então a interface não consegue chamá-lo (`plugin:chave|ler` é recusado). Sem a chave (app reinstalado, troca de celular), a interface mostra "Informe a chave de recuperação", igual ao desktop.
-- **Backup do Android desligado** (`allowBackup="false"`): o banco não vai para o Google Drive nem sai por `adb backup`; entre aparelhos, os dados vão pelo cofre ou pelo backup do FinTrix.
-- **Pasta de dados**: `app_data_dir()` no Android já é privada do app (`/data/data/<id>/`); `restringir` (700) não é necessário lá. `FINTRIX_*` continuam só no debug.
-- **Salvar arquivo** (feito; `salvar_arquivo`: backup, CSV, comprovantes, .zip): o `tauri-plugin-dialog` abre o "Salvar como" do sistema, que no Android devolve um `content://`; a gravação vai pelo `tauri-plugin-fs` (`app.fs().open`), que abre caminho no desktop e `content://` no Android. A interface não tem permissão do plugin fs (só `core:default`).
-- **Bytes pelo IPC** (feito): no Android o `invoke` vai por postMessage em JSON, e um `Uint8Array` chega ao Rust como lista de números; `bytes_do_pedido` aceita os dois formatos. Na volta (`loja_bytes`) o Tauri já entrega `ArrayBuffer`. Custo: gravar um comprovante de 3 MB leva ~4 s no celular (o JSON é grande); se incomodar, mandar em base64 ou em partes.
-- **Abrir arquivo** (restaurar backup, importar extrato, anexar comprovante): o `<input type="file">` da WebView do Android abre o seletor do sistema (o wry trata `onShowFileChooser`; com `capture` oferece a câmera). Só abre com toque de verdade: `click()` vindo do DevTools não abre.
-- **Ver PDF** (feito): a WebView do Android não mostra PDF em `<iframe>` (fica em branco). No celular o visualizador de comprovante mostra **Abrir**, que grava uma cópia em `cache/abrir/` (`abrir_arquivo`, apagada depois de 1 h) e entrega ao leitor do sistema por `FileProvider` (`SistemaPlugin.kt`), só com leitura. O `file_paths.xml` foi reduzido a essa pasta e à das fotos da câmera (o padrão do Tauri liberava todo o armazenamento).
-- **Permissões**: só `INTERNET` (para o S3). Nada de armazenamento externo.
-
-## 3. Sincronização no celular
-
-- **Bucket S3**: funciona igual; é o destino recomendado para quem usa o celular.
-- **Pasta sincronizada**: no Android o app não enxerga a pasta do Syncthing pelo caminho. Duas saídas: (a) usar SAF (`ACTION_OPEN_DOCUMENT_TREE`) e um destino novo em `sync.rs` que lê e grava por um plugin Kotlin; (b) na primeira versão, aceitar só S3 no Android e avisar no pareamento quando o código for de pasta. **Decidido: (b) primeiro**, (a) depois.
-- **Quando sincronizar** (feito): o laço `sincronizar_sempre` só roda com o app aberto, e o Android o congela em segundo plano. A interface sincroniza ao abrir, ao voltar para o app (`visibilitychange`) e depois de cada gravação. Segundo plano de verdade (WorkManager) fica para depois.
-- **Só bucket no celular** (feito): "Ligar a sincronização" mostra só o bucket; `destino_aceito` recusa cofre em pasta no `sync_criar` e no `sync_entrar` (código de pareamento de um cofre em pasta) com uma mensagem que explica o que fazer no computador.
-- **Pareamento pelo QR code** (feito): a janela "Código de pareamento" mostra o QR (`qr_svg`, crate `qrcode`, gerado no Rust) acima do código em texto, no computador e no celular. No celular, "Parear com outro aparelho"/"Entrar num cofre" tem **Ler QR code** (plugin oficial `barcode-scanner`, só no Android; permissões em `capabilities/celular.json`), que lê e já pareia. O QR fica só na tela, como o código.
-- **Teste**: `python3 test/android_sync.py` sobe um S3 local (`test/s3_local.py`, http só no build de debug; o celular chega nele por `adb reverse`), abre o FinTrix de teste no PC com os dados de `fase1.js` e o QR, e espera o celular parear e lançar "Farmácia do celular" (R$ 45,00).
-
-## 4. Interface (`index.html`)
-
-- **Textos** (feito): `celular()` e `aparelho()` ("celular"/"computador"); `aqui()` diz "neste celular". Chave de recuperação, tela sem chave, sincronização e "Seus dados" falam do celular; o painel "Atalhos de teclado" fica escondido e o vazio da Visão geral não cita a tecla D.
-- Teclas de atalho e arrastar arquivo não existem no celular: já são opcionais, nada quebra.
-- **Áreas seguras**: já feitas para o PWA (topo, barra de abas, botão flutuante, rodapé das janelas); no Android 13 a tela fica certa entre as barras. Falta conferir num Android 15+, onde o desenho atrás das barras é obrigatório.
-- **Botão voltar** (feito): o Tauri entrega o voltar ao histórico da WebView e, sem histórico, fecha o app. Enquanto houver algo aberto (visualizador de comprovante, menu, janela, seleção, ou uma tela que não é o Início), fica uma entrada extra no histórico (`acertarVoltar`, chamado por um `MutationObserver`); o `popstate` dá um passo, como o Esc (`voltarUmPasso`). No Início, o voltar sai do app.
-- **Barras do sistema** (feito): o app desenha atrás das barras (`enableEdgeToEdge`), e o Android escolhe a cor dos ícones pelo tema do sistema. `barrasTauri()` chama `barras` (Rust) → `SistemaPlugin.barras` (Kotlin) com ícones escuros no tema claro do app e claros no escuro; roda ao abrir, ao trocar o tema e quando o sistema muda no tema "Automático".
-
-## 5. Testes
-
-- `cargo test -p fintrix-core` no host (cobre a mesclagem e a cifra, que são as mesmas).
-- Celular real pela USB com o build de debug (veja "Como compilar e testar no celular"), dados de teste e um bucket de teste (ou MinIO rodando no PC, na mesma rede); nunca os dados reais. O build de debug fica ao lado de um eventual FinTrix de verdade só se tiver outro `identifier` (sufixo `.debug`), para não misturar dados.
-- Adaptar o `test/desktop.py` para Android é caro (o roteiro entra por `FINTRIX_TESTE`, que lê um arquivo do PC). Mais simples: `adb push` do roteiro para `/data/local/tmp/` e `adb shell run-as <id> cp …` para a pasta do app (o `run-as` só funciona no build de debug); o resultado sai pelo log (`adb logcat`). Depuração da WebView: `chrome://inspect` no Chrome do PC.
-- Teste manual de ponta a ponta: desktop liga o cofre S3 → celular pareia pela apresentação → lança dos dois lados → os dois veem tudo.
-
-## 6. Empacotar e distribuir
-
-- `cargo tauri android build --apk --target aarch64` (ou `--aab` para a Play Store).
-- Chave de assinatura própria (`keytool`), guardada fora do repositório; configurar em `gen/android/keystore.properties` (no `.gitignore`).
-- `identifier` continua `io.github.hudsonjunior42.fintrix`; `versionCode` sobe a cada versão.
-- Distribuição: APK assinado no GitHub Releases (o usuário sobe; esta máquina não faz push). F-Droid ou Play Store depois (a Play exige `.aab`, política de privacidade e revisão).
-- Atualização: o APK novo instala por cima só se for assinado com a mesma chave; perder a chave obriga a desinstalar (e os dados locais vão junto, voltando pelo cofre ou pela chave de recuperação + backup).
-
-## Andamento
-
-- **Etapas 1 e 2 feitas** (nov/2026), conferidas num Redmi Note 11 (Android 13, arm64):
-  - casca em `lib.rs` com `run()` e `mobile_entry_point` (o `main.rs` só chama `run`); `keyring`, `migrar_do_antigo`, ícone e tamanho da janela só no desktop; no celular, `escolher_pasta` responde que lá é só bucket e a chave é fixa de teste no debug (release ainda sem chaveiro);
-  - projeto Gradle em `src-tauri/gen/android/` (vai para o git); SQLCipher com OpenSSL compilado junto no alvo Android;
-  - o app abre na apresentação, o banco fica cifrado em `/data/data/<id>/fintrix.db` (600) e uma gravação sobrevive a fechar e reabrir;
-  - S3: no Android o rustls não achava as raízes (`UnknownIssuer`); `sync::opcoes_android` carrega as do sistema (`/apex/com.android.conscrypt/cacerts` ou `/system/etc/security/cacerts`). Com chaves falsas, a AWS responde 403, ou seja, o TLS funciona.
-- **Etapa 3 feita**: chave no Android Keystore (veja o item 2). Conferido no celular: app novo cria e guarda a chave; reabrir entra direto; sem a chave, o banco fica trancado, a chave errada é recusada e a de recuperação abre e volta a ser guardada. Ícone do FinTrix no lugar do padrão do Tauri; backup do Android desligado.
-- **Etapa 4 feita**: salvar pelo seletor do sistema (conferido: arquivo chegou em Downloads), comprovantes de 1 kB e 3 MB gravados e lidos sem diferença, PDF aberto no leitor do sistema. Falta conferir à mão o seletor do "Restaurar backup" e do "Anexar foto ou PDF" (precisa de toque de verdade).
-- **Etapa 5 feita**: no celular, a sincronização é só por bucket, sincroniza ao voltar para o app e pareia pelo QR code mostrado no computador. Conferido com `test/android_sync.py`: o celular leu o QR, recebeu conta, despesa e comprovante, lançou uma despesa que chegou ao PC; o cofre tem os dois aparelhos e nada em claro.
-- **Etapa 6 feita**: voltar do Android, textos do celular e cor dos ícones das barras. Conferido pelo DevTools (voltar fecha a janela, depois volta ao Início, e no Início não sobra entrada no histórico) e por foto da tela nos dois temas.
-- Próxima: etapa 7 (assinatura, APK de release, guia em `docs/android.md`).
-
-### Como compilar e testar no celular
+- **Android Studio** → SDK Manager: Android SDK Platform 37 (o `compileSdk`/`targetSdk` do tauri-cli 2.12; o `minSdk` é 24, Android 7+), Build-Tools, Platform-Tools, NDK (Side by side) e Command-line Tools. O JDK é o que vem com ele (`/opt/android-studio/jbr`).
+- **Rust**: `rustup target add aarch64-linux-android armv7-linux-androideabi` (o `cargo tauri android init` instala os outros).
+- **Variáveis** (no fish, em `~/.config/fish/conf.d/android.fish`, com `set -gx`):
 
 ```bash
-# variáveis (no fish: ~/.config/fish/conf.d/android.fish com set -gx)
 export JAVA_HOME=/opt/android-studio/jbr ANDROID_HOME=$HOME/Android/Sdk
 export NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370
-cargo tauri android build --debug --apk --target aarch64
-adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
-adb shell am start -n io.github.hudsonjunior42.fintrix/.MainActivity
 ```
 
-- Xiaomi/MIUI: além da depuração USB, ligar "Instalar via USB" nas opções do desenvolvedor. O MIUI também bloqueia toques simulados (`adb shell input`) sem "Depuração USB (configurações de segurança)".
-- Para inspecionar ou testar sem tocar na tela: a WebView de debug expõe o DevTools. `adb forward tcp:9333 localabstract:webview_devtools_remote_$(adb shell pidof io.github.hudsonjunior42.fintrix)` e depois `node test/android/avaliar.mjs 9333 'S.fase'` (avalia a expressão na página e imprime o resultado; aceita `await` dentro de uma função `async`). Ou `chrome://inspect` no Chrome do PC.
-- Cada instalação pela USB no MIUI pede confirmação na tela do celular (uns 10 s); sem ela, `adb install` falha com `INSTALL_FAILED_USER_RESTRICTED`. O `pm clear` também é bloqueado: para zerar os dados de teste, `adb shell "run-as io.github.hudsonjunior42.fintrix rm -f fintrix.db fintrix.db-wal fintrix.db-shm no_backup/chave-do-banco.bin"`.
+- **Celular**: opções do desenvolvedor → depuração USB; `adb devices` precisa listar o aparelho. Em Xiaomi (MIUI), ligar também "Instalar via USB"; cada instalação pede confirmação na tela (uns 10 s), senão `adb install` falha com `INSTALL_FAILED_USER_RESTRICTED`. Se a confirmação nem aparecer, desligar e ligar de novo "Instalar via USB".
 
-## Ordem sugerida
+## Compilar e instalar
 
-0. Fechar o que está pendente no desktop (mensagens de erro do bucket em `sync.rs`, `contexto()` no `main.rs`) num commit, porque a etapa 2 mexe muito no `main.rs`.
-1. Ambiente + `android init` + app abrindo no celular com a chave fixa de teste (só debug).
-2. SQLCipher e S3 compilando no Android; banco abrindo.
-3. Plugin da chave no Keystore.
-4. Salvar e abrir arquivos pelo seletor do sistema.
-5. Sincronização por S3, pareamento pela apresentação, QR code.
-6. Ajustes de interface (áreas seguras, voltar, textos).
-7. Assinatura, APK, documentação (`docs/android.md` vira o guia, `especificacao.md` ganha as diferenças do Android).
+```bash
+cargo tauri android build --debug --apk --target aarch64     # FinTrix (teste)
+adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+adb shell am start -n io.github.hudsonjunior42.fintrix.debug/io.github.hudsonjunior42.fintrix.MainActivity
 
-Estimativa grosseira: etapas 1–2 são as de maior risco (compilação cruzada); 3 e 5 são o grosso do código novo; o resto é ajuste.
+cargo tauri android build --apk --target aarch64             # release assinado (~28 MB)
+cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk dist/android/FinTrix-<versão>.apk
+```
+
+- Só `aarch64` (todo celular atual). Para aparelhos antigos de 32 bits, acrescentar `--target armv7` (o APK cresce).
+- O id do debug vem de `bundle.android.debugApplicationIdSuffix` no `tauri.conf.json`: o tauri-cli reescreve o `applicationIdSuffix` do `app/build.gradle.kts` a cada build, então não adianta mudar lá. O nome ("FinTrix (teste)") vem de `resValue` no mesmo arquivo.
+- `versionName` e `versionCode` saem do `version` do `tauri.conf.json` (0.1.0 → 1000). Subir a versão antes de cada APK publicado, senão o Android não instala por cima.
+- `src-tauri/gen/android/` vai para o git (o `.gitignore` dele tira o que é gerado). Ícones: `python3 tools/icones_android.py` gera o ícone adaptativo (logo de `assets/logo.svg` dentro da área segura, fundo `#0E1117`), a camada monocromática (ícones temáticos do Android 13+) e os PNGs antigos.
+
+## Assinatura
+
+- A chave do release está em `~/.config/fintrix/fintrix-release.jks` (RSA 4096, alias `fintrix`, até 2054), com a senha em `~/.config/fintrix/assinatura.properties` (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`). A pasta é 700 e fica fora do repositório. O `app/build.gradle.kts` lê esse arquivo (ou o caminho em `FINTRIX_ASSINATURA`); sem ele, o release sai sem assinatura e não instala.
+- **Guarde uma cópia dos dois arquivos fora deste computador** (pendrive, gerenciador de senhas). Toda atualização precisa da mesma chave; sem ela, o app novo só instala depois de desinstalar o antigo, e os dados do celular vão junto (voltam pelo cofre de sincronização, ou pelo backup + chave de recuperação).
+- Impressão digital (SHA-256) do certificado: `2D:D6:F8:E4:F3:D9:01:92:80:D8:3C:DA:F7:27:1D:3D:27:33:13:91:0C:F5:E5:8A:35:1E:C3:A7:E5:AC:DB:10`. Conferir um APK: `apksigner verify --print-certs <apk>` (do `build-tools`, com o `java` do Android Studio no PATH).
+
+## Distribuir
+
+- APK assinado no GitHub Releases (o usuário sobe; esta máquina não faz push). Quem instala precisa permitir "instalar apps desconhecidos" para o navegador ou o app de arquivos.
+- F-Droid ou Play Store depois (a Play exige `.aab` com `--aab`, política de privacidade e revisão).
+
+## Testar
+
+- **Núcleo**: `cargo test -p fintrix-core` no PC cobre a mesclagem e a cifra, que são as mesmas no celular.
+- **No celular, só o FinTrix (teste)**, com dados de teste. O DevTools da WebView de debug permite testar sem tocar na tela (o MIUI bloqueia toques simulados):
+
+```bash
+adb forward tcp:9333 localabstract:webview_devtools_remote_$(adb shell pidof io.github.hudsonjunior42.fintrix.debug)
+node test/android/avaliar.mjs 9333 'S.fase'      # avalia na página; aceita await dentro de uma função async
+```
+
+  Ou `chrome://inspect` no Chrome do PC. Para zerar os dados de teste (o MIUI bloqueia `pm clear`): `adb shell "run-as io.github.hudsonjunior42.fintrix.debug rm -f fintrix.db fintrix.db-wal fintrix.db-shm no_backup/chave-do-banco.bin"`.
+- **Sincronização PC ↔ celular**: `python3 test/android_sync.py` sobe um S3 local (`test/s3_local.py`; http só no build de debug, o celular chega nele por `adb reverse`), abre o FinTrix de teste no PC com os dados de `fase1.js` e o QR code, e espera o celular ler o QR, receber tudo e lançar "Farmácia do celular" (R$ 45,00); depois confere o cofre (dois aparelhos, nada em claro).
+- O que só se testa à mão: botão voltar, seletores de arquivo ("Restaurar backup", "Anexar foto ou PDF": a WebView só abre com toque de verdade), câmera do QR.
+
+## Como funciona no celular
+
+**Casca** (`src-tauri/src/lib.rs`): o código fica em `run()` com `#[cfg_attr(mobile, tauri::mobile_entry_point)]`; o `main.rs` do desktop só chama `run()`. O que existe só num lado fica em `#[cfg(desktop)]`/`#[cfg(mobile)]` (chaveiro, ícone e tamanho da janela, escolher pasta). Plugins Kotlin próprios, em `gen/android/app/src/main/java/…`, não têm manifesto de permissões: só o Rust os chama, e a interface recebe "not allowed" se tentar.
+
+- **Chave do banco**: `ChavePlugin.kt` guarda a chave em `no_backup/chave-do-banco.bin`, cifrada com AES-GCM por uma chave do **Android Keystore** (`fintrix-chave-do-banco`, não exportável); o Rust chama em `chaveiro::ler`/`guardar`. Sem a chave (app reinstalado, troca de celular), a interface pede a chave de recuperação, como no desktop.
+- **Backup do Android desligado** (`allowBackup="false"`): o banco não vai para o Google Drive nem sai por `adb backup`.
+- **Banco**: `app_data_dir()` já é privada do app (`/data/data/<id>/fintrix.db`). SQLCipher com OpenSSL compilado junto (`bundled-sqlcipher-vendored-openssl` só no alvo Android, porque o NDK não tem OpenSSL).
+- **S3 e TLS**: o rustls não acha sozinho as raízes do Android (`UnknownIssuer`); `sync::opcoes_android` carrega as do sistema (`/apex/com.android.conscrypt/cacerts` ou `/system/etc/security/cacerts`), que se atualizam com o Android. Todas as opções do cliente HTTP vão num objeto só (`with_client_options` troca o objeto inteiro).
+- **Bytes pelo IPC**: no Android o `invoke` vai por postMessage em JSON, e um `Uint8Array` chega ao Rust como lista de números (`bytes_do_pedido` aceita os dois formatos); na volta o Tauri entrega `ArrayBuffer`. Custo: gravar um comprovante de 3 MB leva ~4 s.
+- **Salvar arquivo**: o "Salvar como" do sistema devolve um `content://`, gravado pelo `tauri-plugin-fs` (`app.fs().open`), que também abre caminhos no desktop.
+- **Ver PDF**: a WebView do Android não mostra PDF em `<iframe>`. O botão **Abrir** grava uma cópia em `cache/abrir/` (`abrir_arquivo`, apagada depois de 1 h) e entrega ao leitor do sistema por `FileProvider` (`SistemaPlugin.abrir`), só com leitura. O `file_paths.xml` libera só essa pasta e a das fotos da câmera.
+- **Sincronização**: só por bucket S3 (`destino_aceito` recusa cofre em pasta, porque o app não enxerga a pasta do Syncthing pelo caminho). O laço de 1 minuto para com o app em segundo plano; a interface sincroniza ao abrir, ao voltar para o app (`visibilitychange`) e depois de cada gravação.
+- **Pareamento pelo QR code**: a janela "Código de pareamento" mostra o QR (`qr_svg`, crate `qrcode`); no celular, **Ler QR code** usa o plugin oficial `barcode-scanner` (permissões em `capabilities/celular.json`) e já pareia.
+- **Botão voltar**: o Tauri entrega o voltar ao histórico da WebView e, sem histórico, fecha o app. Enquanto houver algo aberto (visualizador, menu, janela, seleção, ou uma tela que não é o Início), fica uma entrada extra no histórico (`acertarVoltar`, chamado por um `MutationObserver`); o `popstate` dá um passo, como o Esc (`voltarUmPasso`).
+- **Barras do sistema**: o app desenha atrás das barras (`enableEdgeToEdge`); `barrasTauri()` → `barras` → `SistemaPlugin.barras` deixa os ícones escuros no tema claro do app e claros no escuro. O fundo da abertura segue o tema do sistema (`values*/fundo.xml`).
+- **Textos**: `celular()` e `aparelho()` na interface ("neste celular" em `aqui()`); sem o painel de atalhos de teclado.
+- **Permissões**: `INTERNET` (S3) e `CAMERA` (QR code, pedida na hora). Nada de armazenamento externo.
+
+## Pendências e ideias
+
+- Conferir as áreas seguras num Android 15+, onde o desenho atrás das barras é obrigatório (no Android 13 a tela fica certa).
+- Cofre em pasta no celular: pelo seletor de pasta do sistema (`ACTION_OPEN_DOCUMENT_TREE`) e um destino novo em `sync.rs` que lê e grava por um plugin Kotlin.
+- Sincronizar em segundo plano (WorkManager).
+- Comprovantes grandes mais rápidos: mandar em base64 ou em partes.
+- Emulador: esta máquina não tem `/dev/kvm`; com a virtualização ligada na BIOS, o alvo `x86_64-linux-android` serve para testes sem o celular.

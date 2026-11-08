@@ -37,6 +37,9 @@
       "deb"
     ],
     "category": "Finance",
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    },
     "shortDescription": "Controle financeiro pessoal",
     "longDescription": "Contas, cartões, faturas, orçamento e relatórios, com os dados num banco cifrado neste computador.",
     "license": "MIT",

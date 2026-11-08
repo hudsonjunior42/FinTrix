@@ -82,9 +82,9 @@ v1.1 · 11/10/2026 · antes chamado Livro Caixa · substitui a abordagem por pla
 
 Visão geral · Lançamentos (por dia, filtros, faturas como linha, totais e saldo previsto) · Contas (transferir, ajustar saldo) · Cartões (fatura do mês, limite, pagar) · Relatórios (6 meses, categorias, essencial/estilo de vida/investido) · Orçamento (limite por categoria) · Configurações (categorias, tags, fixas, exportar CSV (`fintrix-AAAA-MM-DD.csv`), backup JSON, restaurar, apagar tudo).
 
-## App Android (em construção)
+## App Android
 
-O mesmo app do desktop (Tauri) no celular; plano e andamento em [android.md](android.md). Diferenças até aqui:
+O mesmo app do desktop (Tauri) no celular; como compilar, assinar e testar em [android.md](android.md). Diferenças:
 - Chave do banco no Android Keystore (no desktop, no chaveiro do sistema); backup automático do Android desligado.
 - Salvar (backup, CSV, comprovantes, .zip) abre o "Salvar como" do sistema.
 - Comprovante em PDF: o visualizador não mostra o PDF; o botão Abrir entrega o arquivo ao leitor de PDF do celular.

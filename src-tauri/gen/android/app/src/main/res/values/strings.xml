@@ -1,4 +1,3 @@
 <resources>
-    <string name="app_name">"FinTrix"</string>
-    <string name="main_activity_title">"FinTrix"</string>
+    <!-- app_name e main_activity_title vêm do app/build.gradle.kts (resValue): "FinTrix" no release, "FinTrix (teste)" no debug -->
 </resources>

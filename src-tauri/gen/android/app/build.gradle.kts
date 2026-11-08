@@ -14,6 +14,15 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Chave de assinatura do release, fora do repositório (docs/android.md, "Assinatura"): storeFile, storePassword,
+// keyAlias e keyPassword. Sem o arquivo, o release sai sem assinatura (não instala).
+val assinatura = Properties().apply {
+    val arq = file(System.getenv("FINTRIX_ASSINATURA") ?: "${System.getProperty("user.home")}/.config/fintrix/assinatura.properties")
+    if (arq.exists()) {
+        arq.inputStream().use { load(it) }
+    }
+}
+
 android {
     compileSdk = 37
     namespace = "io.github.hudsonjunior42.fintrix"
@@ -25,8 +34,23 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    signingConfigs {
+        if (assinatura.getProperty("storeFile") != null) {
+            create("release") {
+                storeFile = file(assinatura.getProperty("storeFile"))
+                storePassword = assinatura.getProperty("storePassword")
+                keyAlias = assinatura.getProperty("keyAlias")
+                keyPassword = assinatura.getProperty("keyPassword")
+            }
+        }
+    }
     buildTypes {
         getByName("debug") {
+            applicationIdSuffix = ".debug"
+            // outro app no celular ("FinTrix (teste)", id com o sufixo de bundle.android.debugApplicationIdSuffix do
+            // tauri.conf.json, que o tauri-cli escreve acima): convive com o de verdade, com dados e chave próprios
+            resValue("string", "app_name", "FinTrix (teste)")
+            resValue("string", "main_activity_title", "FinTrix (teste)")
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             isDebuggable = true
             isJniDebuggable = true
@@ -39,6 +63,9 @@ android {
             }
         }
         getByName("release") {
+            signingConfig = signingConfigs.findByName("release")
+            resValue("string", "app_name", "FinTrix")
+            resValue("string", "main_activity_title", "FinTrix")
             optimization {
                enable = true
             }
@@ -56,6 +83,7 @@ android {
     }
     buildFeatures {
         buildConfig = true
+        resValues = true // nome do app por build type (resValue)
     }
 }
 

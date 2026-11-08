@@ -7,6 +7,7 @@ App de finanças pessoais. Duas formas de rodar o mesmo `index.html`:
 ## Regras
 
 - **Não consultar os dados locais do usuário em verificações.** Não abrir, ler ou contar o que está em `~/.local/share/io.github.hudsonjunior42.fintrix/`, `~/.local/share/br.com.fintrix.app/`, no chaveiro do sistema (serviço `io.github.hudsonjunior42.fintrix`) nem no IndexedDB do navegador do usuário. Não rodar o app (debug ou release) sem `FINTRIX_DADOS` apontando para uma pasta temporária. Para verificar algo, use `test/desktop.py` ou crie dados de teste numa pasta temporária.
+- **No celular, só o app de teste.** O FinTrix de verdade (`io.github.hudsonjunior42.fintrix`, release) tem os dados reais: não abrir, ler, apagar nem desinstalar. Testes usam o "FinTrix (teste)" (`io.github.hudsonjunior42.fintrix.debug`, build de debug). A chave de assinatura (`~/.config/fintrix/`) não se lê nem se copia.
 - Tudo em português do Brasil: código (nomes de funções e variáveis), comentários, documentação, textos da interface e mensagens de commit (`feat: …`, `fix: …`, `docs: …`, `test: …`, `build: …`).
 - `docs/especificacao.md` é a fonte de verdade das regras do app; atualize junto quando mudar comportamento.
 - Não fazer push: esta máquina não tem credenciais do GitHub (nem `gh`). O usuário faz o push.
@@ -25,7 +26,7 @@ test/desktop.py          testa o app desktop pela interface; roteiros em test/de
 test/android/avaliar.mjs avalia JS na WebView do app Android (DevTools pelo adb forward)
 test/android_sync.py     PC ↔ celular: pareamento pelo QR e sincronização num S3 local (test/s3_local.py)
 test/ui/, test/*.py      testes da versão web (Playwright, não instalado nesta máquina)
-docs/                    especificacao.md, desktop-tauri.md, sincronizacao.md, bucket-s3.md, android.md (plano)
+docs/                    especificacao.md, desktop-tauri.md, sincronizacao.md, bucket-s3.md, android.md (guia do app Android)
 ```
 
 ## Comandos
@@ -37,10 +38,11 @@ cargo test -p fintrix-core                 # núcleo: banco, mesclagem, cifra, d
 python3 test/desktop.py                    # app desktop pela interface (precisa de tela; roda com o FinTrix do usuário aberto)
 cargo tauri build --bundles appimage,deb   # pacotes em target/release/bundle/ (copiar para dist/linux/)
 python3 tools/tauri_prep.py                # só a cópia do app web (o build já chama)
-cargo tauri android build --debug --apk --target aarch64   # Android; variáveis e passos em docs/android.md
+cargo tauri android build --debug --apk --target aarch64   # Android "FinTrix (teste)"; variáveis e passos em docs/android.md
+cargo tauri android build --apk --target aarch64           # Android release assinado (copiar para dist/android/)
 ```
 
-Android: SDK em `~/Android/Sdk`, NDK 30, JDK do Android Studio (`/opt/android-studio/jbr`); `JAVA_HOME`, `ANDROID_HOME` e `NDK_HOME` precisam estar definidos (veja `docs/android.md`). No celular do usuário só o build de debug com dados de teste.
+Android: SDK em `~/Android/Sdk`, NDK 30, JDK do Android Studio (`/opt/android-studio/jbr`); `JAVA_HOME`, `ANDROID_HOME` e `NDK_HOME` precisam estar definidos (veja `docs/android.md`). No celular do usuário, testes só no "FinTrix (teste)" (id `.debug`) com dados de teste.
 
 Checagem rápida da versão web: servir a pasta (`.claude/launch.json` tem `fintrix-web` na porta 8765) e conferir `S.fase`, sem dados reais. Sintaxe do JS: extrair o maior `<script>` do index.html e rodar `node --check`.
 
