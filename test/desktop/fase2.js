@@ -24,7 +24,21 @@ T.rodar(async () => {
   // Configurações › Seus dados › Chave de recuperação
   T.q('.side [data-view="config"]').click();
   await T.espera(() => T.q('[data-act="chave-ver"]'), "Configurações");
-  T.check("textos do app desktop", T.q("#content").innerText.includes("neste navegador"), false);
+  // nenhum texto de navegador (nem marcador ${...} esquecido) nas telas de dados do app desktop
+  const webismos = t => (t.match(/navegador|[Bb]aixar|[Bb]aixe|página|download|\$\{/g) || []);
+  T.check("textos de Configurações", webismos(T.q("#content").innerText), []);
+  T.q('[data-act="copias"]').click();
+  await T.espera(() => T.q(".modal"), "janela de cópias");
+  T.check("textos das cópias automáticas", webismos(T.q(".modal").innerText), []);
+  T.q('.modal [data-act="fechar"]').click();
+  await T.espera(() => !T.q(".modal"), "fechar cópias");
+  const dt = new DataTransfer();
+  dt.items.add(new File([JSON.stringify(montarBackup(await lerTudo()))], "b.json", { type: "application/json" }));
+  const inp = T.q("#imp-json"); inp.files = dt.files; inp.dispatchEvent(new Event("change", { bubbles: true }));
+  await T.espera(() => T.q('[data-act="restaurar-ok"]'), "janela de restaurar");
+  T.check("textos da janela de restaurar", webismos(T.q(".modal").innerText), []);
+  T.q('.modal [data-act="fechar"]').click();
+  await T.espera(() => !T.q(".modal"), "fechar restaurar");
   T.q('[data-act="chave-ver"]').click();
   await T.espera(() => T.q("#ch-ver"), "janela da chave");
   T.check("chave de recuperação mostrada", T.q("#ch-ver").textContent.replace(/[^0-9a-f]/g, ""), CHAVE);

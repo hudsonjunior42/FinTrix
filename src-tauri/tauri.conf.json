@@ -27,7 +27,8 @@
       "dangerousDisableAssetCspModification": [
         "style-src"
       ]
-    }
+    },
+    "enableGTKAppId": true
   },
   "bundle": {
     "active": true,
@@ -45,6 +46,19 @@
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.png"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "fintrix.desktop",
+        "files": {
+          "/usr/share/icons/hicolor/256x256/apps/io.github.hudsonjunior42.fintrix.png": "icons/128x128@2x.png"
+        }
+      },
+      "appimage": {
+        "files": {
+          "/usr/share/icons/hicolor/256x256/apps/io.github.hudsonjunior42.fintrix.png": "icons/128x128@2x.png"
+        }
+      }
+    }
   }
 }

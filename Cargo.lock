@@ -1024,6 +1024,7 @@ name = "fintrix"
 version = "0.1.0"
 dependencies = [
  "fintrix-core",
+ "glib",
  "keyring",
  "serde_json",
  "tauri",

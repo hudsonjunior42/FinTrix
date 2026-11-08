@@ -102,6 +102,35 @@ fn restringir(dir: &Path) {
     }
 }
 
+/// Ícone da janela e atalho no menu para quem roda o AppImage ou o executável solto. No Wayland (KDE, GNOME)
+/// o ícone vem do arquivo .desktop e do ícone com o mesmo nome do app_id (o identificador, via `set_prgname`);
+/// sem eles a janela fica com o ícone genérico. O .deb instala os seus; aqui só grava ou atualiza o que falta.
+#[cfg(target_os = "linux")]
+fn registrar_atalho(app: &AppHandle) {
+    let icone_sistema = Path::new("/usr/share/icons/hicolor/256x256/apps").join(format!("{SERVICO}.png"));
+    if cfg!(debug_assertions) || std::env::var_os("FINTRIX_DADOS").is_some() || icone_sistema.exists() {
+        return;
+    }
+    let Ok(base) = app.path().data_dir() else { return }; // ~/.local/share
+    // no AppImage, o executável é temporário: o atalho aponta para o próprio .AppImage
+    let Some(exec) = std::env::var_os("APPIMAGE").map(PathBuf::from).or_else(|| std::env::current_exe().ok()) else { return };
+    let desktop = base.join("applications").join(format!("{SERVICO}.desktop"));
+    let conteudo = format!(
+        "[Desktop Entry]\nType=Application\nName=FinTrix\nComment=Controle financeiro pessoal\nExec=\"{}\"\n\
+         Icon={SERVICO}\nStartupWMClass={SERVICO}\nCategories=Office;Finance;\nTerminal=false\n",
+        exec.display()
+    );
+    if fs::read_to_string(&desktop).ok().as_deref() != Some(conteudo.as_str()) {
+        let _ = fs::create_dir_all(base.join("applications"));
+        let _ = fs::write(&desktop, conteudo);
+    }
+    let icone = base.join("icons/hicolor/256x256/apps").join(format!("{SERVICO}.png"));
+    if !icone.exists() {
+        let _ = fs::create_dir_all(icone.parent().unwrap());
+        let _ = fs::write(&icone, include_bytes!("../icons/128x128@2x.png"));
+    }
+}
+
 fn abrir_banco(arquivo: &Path) -> Result<(Option<(Arc<Store>, String)>, Option<&'static str>), String> {
     let existe = arquivo.exists();
     Ok(match ler_chave() {
@@ -268,6 +297,9 @@ fn teste_fim(app: AppHandle, ok: bool, relatorio: String) {
 }
 
 fn main() {
+    // no Wayland, o app_id da janela é o nome do programa: com o identificador, ele casa com o .desktop e o ícone
+    #[cfg(target_os = "linux")]
+    glib::set_prgname(Some(SERVICO));
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -275,12 +307,18 @@ fn main() {
             fs::create_dir_all(&dir)?;
             restringir(&dir);
             migrar_do_antigo(app.handle(), &dir);
+            #[cfg(target_os = "linux")]
+            registrar_atalho(app.handle());
             let arquivo = dir.join("fintrix.db");
             let (aberto, motivo) = abrir_banco(&arquivo)?;
             app.manage(Banco { arquivo, aberto: RwLock::new(aberto), motivo: RwLock::new(motivo) });
             // a WebView guarda o que é dela (preferências da tela) junto com o banco
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                .title("FinTrix")
+            let mut janela = WebviewWindowBuilder::new(app, "main", WebviewUrl::default()).title("FinTrix");
+            // no X11 (e no Windows) o ícone vem daqui; no Wayland, do .desktop (registrar_atalho)
+            if let Some(icone) = app.default_window_icon() {
+                janela = janela.icon(icone.clone())?;
+            }
+            janela
                 .inner_size(1200.0, 800.0)
                 .min_inner_size(380.0, 600.0)
                 .data_directory(dir.join("webview"))

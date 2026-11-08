@@ -1026,7 +1026,7 @@ function avisoBackup() {
   if (S.modo !== "local") return "";
   if (BK.pasta) {
     if (BK.perm !== "granted") return barraAviso(`O backup automático está pausado: o navegador pede para confirmar o acesso à pasta <b>${esc(BK.pasta.name)}</b>.`, `<button class="btn sm pri" data-act="bk-permitir">Permitir</button>`);
-    if (BK.erro) return barraAviso(BK.erro === "sumiu" ? `A pasta do backup automático (<b>${esc(BK.pasta.name)}</b>) não foi encontrada. Escolha outra.` : "O último backup automático falhou.", `<button class="btn sm pri" data-act="bk-pasta">Escolher pasta</button><button class="btn sm" data-act="exp-json">Baixar backup</button>`);
+    if (BK.erro) return barraAviso(BK.erro === "sumiu" ? `A pasta do backup automático (<b>${esc(BK.pasta.name)}</b>) não foi encontrada. Escolha outra.` : "O último backup automático falhou.", `<button class="btn sm pri" data-act="bk-pasta">Escolher pasta</button><button class="btn sm" data-act="exp-json">${tx("Baixar backup", "Salvar backup")}</button>`);
     return "";
   }
   if (lsGet("bkAdiar", 0) > Date.now()) return "";
@@ -1034,7 +1034,7 @@ function avisoBackup() {
   if (!(ult ? (novos > 0 && dias >= 7) || novos >= 50 : novos >= 10)) return "";
   const quando = dias === 0 ? "hoje" : dias === 1 ? "ontem" : `há ${dias} dias`;
   const txt = ult ? `Último backup ${quando}; ${plural(novos, "lançamento novo", "lançamentos novos")} desde então.` : `Você ainda não baixou nenhum backup (${plural(novos, "lançamento", "lançamentos")}).`;
-  return barraAviso(`${txt} Os dados ficam só ${aqui()}.`, `<button class="btn sm pri" data-act="exp-json">Baixar backup</button>${pastaSuportada() ? `<button class="btn sm" data-act="bk-pasta">Backup automático</button>` : ""}<button class="btn sm ghost" data-act="bk-adiar">Depois</button>`);
+  return barraAviso(`${txt} Os dados ficam só ${aqui()}.`, `<button class="btn sm pri" data-act="exp-json">${tx("Baixar backup", "Salvar backup")}</button>${pastaSuportada() ? `<button class="btn sm" data-act="bk-pasta">Backup automático</button>` : ""}<button class="btn sm ghost" data-act="bk-adiar">Depois</button>`);
 }
 // proteção contra a limpeza automática do navegador (armazenamento persistente)
 const PERSIST = { ok: null, uso: null };
@@ -1065,8 +1065,8 @@ function textoErro(e) { return `FinTrix ${APP_VERSAO} · ${S.modo || "?"} · tel
 function telaSeguranca(e) {
   ULT_ERRO = textoErro(e);
   const el = $("#content"); if (!el) return;
-  el.innerHTML = `<div class="state"><b>Esta tela encontrou um erro</b>Seus dados não foram afetados. Baixe um backup de emergência, volte para a Visão geral ou recarregue a página.
-    <div class="state-acoes"><button class="btn pri" data-act="bk-emergencia">Baixar backup de emergência</button><button class="btn" data-act="seg-geral">Ir para a Visão geral</button><button class="btn" data-act="recarregar">Recarregar</button></div>
+  el.innerHTML = `<div class="state"><b>Esta tela encontrou um erro</b>Seus dados não foram afetados. ${tx("Baixe um backup de emergência, volte para a Visão geral ou recarregue a página.", "Salve um backup de emergência, volte para a Visão geral ou recarregue a tela.")}
+    <div class="state-acoes"><button class="btn pri" data-act="bk-emergencia">${tx("Baixar backup de emergência", "Salvar backup de emergência")}</button><button class="btn" data-act="seg-geral">Ir para a Visão geral</button><button class="btn" data-act="recarregar">Recarregar</button></div>
     <details class="seg-det"><summary>Detalhes do erro</summary><pre>${esc(ULT_ERRO)}</pre><button class="btn sm" data-act="copiar-erro">Copiar detalhes</button></details></div>`;
 }
 function mostrarBarra(id, html, acoes = []) {
@@ -1081,7 +1081,7 @@ function avisoErro(e, arquivo) {
   if (/ResizeObserver loop/.test(String((e && e.message) || e || ""))) return;
   console.error(e);
   ULT_ERRO = textoErro(e);
-  mostrarBarra("erro", "Algo deu errado. Se a tela parar de responder, baixe um backup de emergência e recarregue.", [["Backup de emergência", "bk-emergencia"], ["Recarregar", "recarregar"], ["Detalhes", "ver-erro"]]);
+  mostrarBarra("erro", tx("Algo deu errado. Se a tela parar de responder, baixe um backup de emergência e recarregue.", "Algo deu errado. Se a tela parar de responder, salve um backup de emergência e recarregue a tela."), [["Backup de emergência", "bk-emergencia"], ["Recarregar", "recarregar"], ["Detalhes", "ver-erro"]]);
 }
 // lê o banco local direto, sem o app (para quando a abertura falhou)
 async function lerIndexedDbBruto() {
@@ -1106,7 +1106,7 @@ async function backupEmergencia() {
   if (!dados?.config && S.modo !== "claude") { try { dados = await lerIndexedDbBruto(); } catch (e) { console.error(e); } }
   if (!dados?.config) { toast("Não encontrei dados para salvar."); return; }
   try { await (S.dl || downloadsNavegador()).save({ filename: `fintrix-emergencia-${today()}.json`, data: JSON.stringify(montarBackup(dados), null, 1) }); toast("Backup de emergência pronto"); }
-  catch (e) { console.error(e); toast(e && e.code === "declined" ? "Download cancelado." : "Não foi possível gerar o arquivo."); }
+  catch (e) { console.error(e); toast(e && e.code === "declined" ? "Download cancelado." : tx("Não foi possível gerar o arquivo.", "Não foi possível salvar o arquivo.")); }
 }
 
 /* ---------- restauração: confere, mostra o resumo, pergunta como e grava tudo de uma vez */
@@ -1132,7 +1132,7 @@ function abrirRestaurar(j, r) {
   const s = r.resumo, temDados = !!S.cfg;
   MS = { kind: "restaurar", j };
   const per = !s.n ? "sem lançamentos" : s.de === s.ate ? mesLongo(s.de) : `${mesCurto(s.de)} a ${mesCurto(s.ate)}`;
-  const copia = S.sisOk ? "Antes, o app guarda uma cópia dos dados atuais ${aqui()} (Configurações › Seus dados › Cópias automáticas)." : "Este navegador não permite guardar uma cópia automática: baixe um backup dos dados atuais antes, se quiser guardá-los.";
+  const copia = S.sisOk ? `Antes, o app guarda uma cópia dos dados atuais ${aqui()} (Configurações › Seus dados › Cópias automáticas).` : "Este navegador não permite guardar uma cópia automática: baixe um backup dos dados atuais antes, se quiser guardá-los.";
   abrirJanela(`<div class="mhead"><h3>Restaurar backup</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>
     <form class="mbody" id="f-rest">
       <div class="rest-resumo">
@@ -1178,7 +1178,7 @@ async function abrirCopias() {
   abrirJanela(`<div class="mhead"><h3>Cópias automáticas</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>
     <div class="mbody"><div class="hint">Antes de restaurar um backup, atualizar o formato dos dados ou apagar tudo, o app guarda uma cópia ${aqui()}. Ficam as ${COPIAS_MAX} mais recentes. Elas não protegem contra ${nativoTauri() ? "perder o computador" : "limpar os dados do navegador"}: para isso existe o backup em arquivo.</div>
       <div class="list">${lista.map(c => `<div class="li"><div class="grow"><div class="t1">${esc(c.motivo)}</div><div class="t2">${esc(dataHora(c.quando))} · ${plural(c.n, "lançamento", "lançamentos")} · ${tamTxt(c.tam)}</div></div>
-        <button class="btn sm" data-act="copia-baixar" data-id="${c.id}">Baixar</button><button class="btn sm" data-act="copia-restaurar" data-id="${c.id}">Restaurar</button></div>`).join("") || '<div class="empty">Nenhuma cópia guardada ainda.</div>'}</div></div>
+        <button class="btn sm" data-act="copia-baixar" data-id="${c.id}">${tx("Baixar", "Salvar")}</button><button class="btn sm" data-act="copia-restaurar" data-id="${c.id}">Restaurar</button></div>`).join("") || '<div class="empty">Nenhuma cópia guardada ainda.</div>'}</div></div>
     <div class="mfoot"><span class="sp"></span><button class="btn" data-act="fechar">Fechar</button></div>`, "sm");
 }
 async function copiaAcao(id, restaurar) {
@@ -1283,6 +1283,8 @@ function persistTauri() {
 }
 const nativoTauri = () => !!(window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === "function");
 const aqui = () => nativoTauri() ? "neste computador" : "neste navegador";
+// texto da versão web ou do app desktop (lá não há navegador, página nem download: os arquivos são salvos)
+const tx = (web, desktop) => nativoTauri() ? desktop : web;
 // No app desktop, os outros IndexedDB (sistema: cópias automáticas; anexos: comprovantes) viram lojas do SQLite cifrado.
 // fn recebe uma imitação do objectStore; os pedidos rodam em ordem depois que fn volta, e o pedido devolvido por fn
 // traz o resultado, como em sisTx/anxTx. Arquivos (campo blob) vão como bytes crus; no getAll vêm sob demanda.
@@ -1624,14 +1626,14 @@ function renderTela() {
   if (fase === "sem-db") { $("#title").textContent = "FinTrix"; el.innerHTML = `<div class="state"><b>Abra pelo claude.ai</b>Seus dados ficam salvos na sua conta claude.ai. Abra este app pelo link do artifact, com a sua conta conectada.</div>`; return; }
   if (fase === "sem-login") { $("#title").textContent = "FinTrix"; el.innerHTML = `<div class="state"><b>Entre na sua conta</b>Para guardar seus lançamentos, o app precisa saber quem você é. Entre no claude.ai e abra o link de novo.</div>`; return; }
   if (fase === "sem-chave") { $("#title").textContent = "FinTrix"; renderSemChave(el); return; }
-  if (fase === "sem-local") { $("#title").textContent = "FinTrix"; el.innerHTML = `<div class="state"><b>Este navegador não deixou guardar dados</b>Abra o FinTrix por um servidor local (veja o LEIAME) em vez de abrir o arquivo direto, e evite janelas anônimas.</div>`; return; }
-  if (fase === "erro") { el.innerHTML = `<div class="state"><b>Não deu para carregar</b>O armazenamento não respondeu. Recarregue a página em instantes.<div class="state-acoes"><button class="btn pri" data-act="recarregar">Recarregar</button><button class="btn" data-act="bk-emergencia">Baixar backup de emergência</button></div></div>`; return; }
-  if (fase === "migrando") { $("#title").textContent = "FinTrix"; el.innerHTML = `<div class="state"><b>Atualizando o formato dos dados…</b>Esta versão do FinTrix guarda os dados de um jeito novo. Antes de mudar, o app guarda uma cópia dos dados atuais. Não feche a página.</div>`; return; }
-  if (fase === "erro-migracao") { $("#title").textContent = "FinTrix"; el.innerHTML = `<div class="state"><b>Não deu para atualizar os dados</b>${S.modo === "local" ? "Nada foi alterado: seus dados continuam como estavam." : "A atualização pode ter ficado pela metade; tentar de novo termina o trabalho."} Baixe um backup de emergência antes de tentar de novo.
-      <div class="state-acoes"><button class="btn pri" data-act="bk-emergencia">Baixar backup de emergência</button><button class="btn" data-act="migrar-de-novo">Tentar de novo</button></div>
+  if (fase === "sem-local") { $("#title").textContent = "FinTrix"; el.innerHTML = `<div class="state">${tx("<b>Este navegador não deixou guardar dados</b>Abra o FinTrix por um servidor local (veja o LEIAME) em vez de abrir o arquivo direto, e evite janelas anônimas.", "<b>Não deu para abrir o banco de dados</b>O armazenamento do app não respondeu. Feche o FinTrix e abra de novo.")}</div>`; return; }
+  if (fase === "erro") { el.innerHTML = `<div class="state"><b>Não deu para carregar</b>O armazenamento não respondeu. ${tx("Recarregue a página em instantes.", "Tente de novo em instantes.")}<div class="state-acoes"><button class="btn pri" data-act="recarregar">Recarregar</button><button class="btn" data-act="bk-emergencia">${tx("Baixar backup de emergência", "Salvar backup de emergência")}</button></div></div>`; return; }
+  if (fase === "migrando") { $("#title").textContent = "FinTrix"; el.innerHTML = `<div class="state"><b>Atualizando o formato dos dados…</b>Esta versão do FinTrix guarda os dados de um jeito novo. Antes de mudar, o app guarda uma cópia dos dados atuais. ${tx("Não feche a página.", "Não feche o app.")}</div>`; return; }
+  if (fase === "erro-migracao") { $("#title").textContent = "FinTrix"; el.innerHTML = `<div class="state"><b>Não deu para atualizar os dados</b>${S.modo === "local" ? "Nada foi alterado: seus dados continuam como estavam." : "A atualização pode ter ficado pela metade; tentar de novo termina o trabalho."} ${tx("Baixe", "Salve")} um backup de emergência antes de tentar de novo.
+      <div class="state-acoes"><button class="btn pri" data-act="bk-emergencia">${tx("Baixar backup de emergência", "Salvar backup de emergência")}</button><button class="btn" data-act="migrar-de-novo">Tentar de novo</button></div>
       <details class="seg-det"><summary>Detalhes do erro</summary><pre>${esc(textoErro(S.migErro))}</pre></details></div>`; return; }
-  if (fase === "versao-nova") { $("#title").textContent = "FinTrix"; el.innerHTML = `<div class="state"><b>Estes dados são de uma versão mais nova do FinTrix</b>Eles estão no formato v${versaoDe(S.cfg)}, e esta versão do app só conhece até a v${VERSAO_DADOS}. Para não estragar nada, o app não abre os dados. Recarregue a página para pegar a versão nova.
-      <div class="state-acoes"><button class="btn pri" data-act="recarregar">Recarregar</button><button class="btn" data-act="bk-emergencia">Baixar backup de emergência</button></div></div>`; return; }
+  if (fase === "versao-nova") { $("#title").textContent = "FinTrix"; el.innerHTML = `<div class="state"><b>Estes dados são de uma versão mais nova do FinTrix</b>Eles estão no formato v${versaoDe(S.cfg)}, e esta versão do app só conhece até a v${VERSAO_DADOS}. Para não estragar nada, o app não abre os dados. ${tx("Recarregue a página para pegar a versão nova.", "Instale a versão nova do FinTrix para abrir.")}
+      <div class="state-acoes"><button class="btn pri" data-act="recarregar">Recarregar</button><button class="btn" data-act="bk-emergencia">${tx("Baixar backup de emergência", "Salvar backup de emergência")}</button></div></div>`; return; }
   if (fase === "onboarding") { $("#title").textContent = "Boas-vindas"; renderOnboarding(el); return; }
   derivar();
   $("#mlabel").textContent = anualRel() ? S.mes.slice(0, 4) : mesLongo(S.mes);
@@ -2371,7 +2373,7 @@ function blocoDados() {
   const li = (t1, t2, acoes = "") => `<div class="li"><div class="grow"><div class="t1">${t1}</div><div class="t2">${t2}</div></div>${acoes ? `<div class="acoes">${acoes}</div>` : ""}</div>`;
   let pasta = "";
   if (local) {
-    if (nativoTauri()) pasta = li("Backup automático", "Ainda não existe no app desktop. O aviso na Visão geral lembra de baixar o backup.");
+    if (nativoTauri()) pasta = li("Backup automático", "Ainda não existe no app desktop. O aviso na Visão geral lembra de salvar um backup.");
     else if (!pastaSuportada()) pasta = li("Backup automático", "Este navegador não grava numa pasta sozinho (isso funciona no Chrome e no Edge do computador). O aviso na Visão geral lembra de baixar o backup.");
     else if (!BK.pasta) pasta = li("Backup automático", `Desligado. Escolha uma pasta e o app grava um arquivo por dia sempre que algo muda, guardando os últimos ${BK_MANTER} dias. Uma pasta sincronizada (Google Drive, Syncthing…) leva a cópia para fora do computador.`, `<button class="btn sm pri" data-act="bk-pasta">Escolher pasta</button>`);
     else pasta = li("Backup automático", `Pasta <b>${esc(BK.pasta.name)}</b> · ${BK.perm !== "granted" ? '<span class="warn">pausado: falta permitir o acesso</span>' : BK.erro ? '<span class="warn">o último falhou</span>' : `ligado, um arquivo por dia (últimos ${BK_MANTER} dias)`}`,
@@ -2382,7 +2384,7 @@ function blocoDados() {
   const copias = S.sisOk ? li(`Cópias automáticas ${aqui()}`, COPIAS.n ? `${COPIAS.n} guardada${COPIAS.n === 1 ? "" : "s"}. A mais recente: ${esc(COPIAS.ult.motivo.charAt(0).toLowerCase() + COPIAS.ult.motivo.slice(1))}, ${esc(dataHora(COPIAS.ult.quando))}.` : "Nenhuma ainda. O app guarda uma antes de restaurar um backup, atualizar o formato dos dados ou apagar tudo.", COPIAS.n ? '<button class="btn sm" data-act="copias">Ver</button>' : "") : "";
   return `<section class="panel"><div class="panel-h"><h2>Seus dados</h2></div>
         <div class="list dados-st">${li("Último backup", ult)}${pasta}${prot}${copias}${blocoAnexos()}</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" data-act="importar">Importar extrato ou fatura</button><button class="btn" data-act="exp-csv">Exportar planilha (CSV)</button><button class="btn" data-act="exp-json">Baixar backup</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" data-act="importar">Importar extrato ou fatura</button><button class="btn" data-act="exp-csv">Exportar planilha (CSV)</button><button class="btn" data-act="exp-json">${tx("Baixar backup", "Salvar backup")}</button>
         <label class="btn" for="imp-json" style="cursor:pointer">Restaurar backup</label><input type="file" id="imp-json" accept=".json,application/json" class="sr"></div>
         <div class="hint" style="margin-top:8px">${local ? (nativoTauri() ? "Os dados ficam só neste computador, num banco cifrado." : "Os dados ficam só neste navegador, neste aparelho.") : "Os dados ficam na sua conta claude.ai."} O CSV abre no OnlyOffice e no Excel (separador ponto e vírgula).</div>
         <div id="dados-msg" class="hint" style="margin-top:6px"></div>
@@ -2394,7 +2396,8 @@ function blocoSobre() {
         <div class="sobre"><span>Versão</span><b>FinTrix ${esc(APP_VERSAO)}${build ? ` · build <span class="num">${esc(build)}</span>` : ""}</b>
           <span>Formato dos dados</span><b>v${VERSAO_DADOS}</b>
           <span>Onde ficam</span><b>${local ? (nativoTauri() ? "neste computador · banco cifrado" : `neste navegador${host ? ` · ${esc(host)}` : ""}`) : "na sua conta claude.ai"}</b></div>
-        ${local ? `<div class="hint" style="margin-top:10px">Cada navegador, sistema operacional e aparelho guarda os seus próprios dados: o FinTrix aberto em outro navegador, no outro sistema de um dual boot ou no celular começa vazio. Abra sempre pelo mesmo endereço${host ? ` (${esc(host)})` : ""}: outra porta, ou 127.0.0.1 no lugar de localhost, também é outro banco de dados.</div>` : ""}</section>`;
+        ${local && nativoTauri() ? `<div class="hint" style="margin-top:10px">Cada computador e cada usuário do sistema guarda os seus próprios dados: o FinTrix aberto em outro computador, no outro sistema de um dual boot, na versão web ou no celular começa vazio. Para levar os dados, use o backup.</div>` : ""}
+        ${local && !nativoTauri() ? `<div class="hint" style="margin-top:10px">Cada navegador, sistema operacional e aparelho guarda os seus próprios dados: o FinTrix aberto em outro navegador, no outro sistema de um dual boot ou no celular começa vazio. Abra sempre pelo mesmo endereço${host ? ` (${esc(host)})` : ""}: outra porta, ou 127.0.0.1 no lugar de localhost, também é outro banco de dados.</div>` : ""}</section>`;
 }
 const ordCat = (a, b) => (a[1].ordem || 0) - (b[1].ordem || 0) || a[1].nome.localeCompare(b[1].nome, "pt-BR");
 function irmaosCat(id) {
@@ -2743,8 +2746,8 @@ async function abrirAnexo(id) {
   const v = document.createElement("div"); v.className = "mback anx-view"; v.id = "anx-view"; v.dataset.url = url || "";
   v.innerHTML = `<div class="modal lg" role="dialog" aria-modal="true" aria-label="${esc(meta.nome)}"><div class="mhead"><h3>${esc(meta.nome)}</h3><button class="icon-btn" data-act="anx-fechar" aria-label="Fechar">${svg("x")}</button></div>
     <div class="mbody anx-corpo">${!r ? `<div class="empty"><b>Arquivo não encontrado neste aparelho</b>Ele pode estar no .zip de comprovantes ou na pasta do backup automático (Configurações › Seus dados).</div>`
-      : ehImagem(r.tipo) ? `<img src="${url}" alt="${esc(r.nome)}">` : r.tipo === "application/pdf" ? `<iframe src="${url}" title="${esc(r.nome)}"></iframe>` : `<div class="empty"><b>${esc(r.nome)}</b>Este tipo de arquivo não tem visualização. Baixe para abrir.</div>`}</div>
-    <div class="mfoot"><span class="hint">${r ? tamTxt(r.tam) : ""}</span><span class="sp"></span>${r ? `<button class="btn" data-act="anx-baixar" data-id="${esc(id)}">Baixar</button>` : ""}<button class="btn pri" data-act="anx-fechar">Fechar</button></div></div>`;
+      : ehImagem(r.tipo) ? `<img src="${url}" alt="${esc(r.nome)}">` : r.tipo === "application/pdf" ? `<iframe src="${url}" title="${esc(r.nome)}"></iframe>` : `<div class="empty"><b>${esc(r.nome)}</b>Este tipo de arquivo não tem visualização. ${tx("Baixe", "Salve")} para abrir.</div>`}</div>
+    <div class="mfoot"><span class="hint">${r ? tamTxt(r.tam) : ""}</span><span class="sp"></span>${r ? `<button class="btn" data-act="anx-baixar" data-id="${esc(id)}">${tx("Baixar", "Salvar")}</button>` : ""}<button class="btn pri" data-act="anx-fechar">Fechar</button></div></div>`;
   document.body.appendChild(v);
 }
 function fecharAnexo() { const v = $("#anx-view"); if (!v) return false; if (v.dataset.url) URL.revokeObjectURL(v.dataset.url); v.remove(); return true; }
@@ -2779,7 +2782,7 @@ function blocoAnexos() {
   return `<div class="li"><div class="grow"><div class="t1">Comprovantes</div><div class="t2">${!a.pronto ? "Contando…" : a.n ? `${plural(a.n, "arquivo", "arquivos")} · ${tamTxt(a.tam)}. Ficam neste aparelho e não entram no backup .json: use o .zip${pastaSuportada() ? " ou o backup automático, que copia os comprovantes para a pasta" : ""}.` : "Nenhum ainda. Anexe fotos ou PDFs em Mais opções, na janela do lançamento."}
       ${a.faltam ? `<br><span class="warn">${plural(a.faltam, "comprovante não está", "comprovantes não estão")} neste aparelho.</span> Restaure o .zip${BK.pasta ? " ou recupere da pasta do backup" : ""}.` : ""}
       ${a.orfaos.length ? `<br>${plural(a.orfaos.length, "arquivo sem lançamento", "arquivos sem lançamento")} (de lançamentos apagados).` : ""}</div></div>
-    <div class="acoes">${a.n ? '<button class="btn sm" data-act="anx-zip">Baixar .zip</button>' : ""}<label class="btn sm" for="imp-zip" style="cursor:pointer">Restaurar .zip</label><input type="file" id="imp-zip" accept=".zip,application/zip" class="sr">
+    <div class="acoes">${a.n ? '<button class="btn sm" data-act="anx-zip">${tx("Baixar .zip", "Salvar .zip")}</button>' : ""}<label class="btn sm" for="imp-zip" style="cursor:pointer">Restaurar .zip</label><input type="file" id="imp-zip" accept=".zip,application/zip" class="sr">
       ${a.faltam && BK.pasta ? '<button class="btn sm" data-act="anx-pasta">Recuperar da pasta</button>' : ""}${a.orfaos.length ? '<button class="btn sm ghost" data-act="anx-orfaos">Apagar sem lançamento</button>' : ""}</div></div>`;
 }
 
@@ -4364,7 +4367,7 @@ async function exportJSON() {
 }
 function pedirApagarTudo() {
   abrirJanela(`<div class="mhead t-despesa"><h3>Apagar todos os dados</h3><button class="icon-btn" data-act="fechar" aria-label="Fechar">${svg("x")}</button></div>
-    <form class="mbody" id="f-apagar"><div>Isso apaga contas, cartões, categorias e todos os lançamentos${anexosOk() ? ", inclusive os comprovantes (que não entram na cópia automática)" : ""}. ${S.sisOk ? "Por precaução, uma cópia fica guardada neste navegador (Cópias automáticas), mas baixe um backup em arquivo se quiser guardar os dados." : "Baixe um backup antes se quiser guardar algo."}</div>
+    <form class="mbody" id="f-apagar"><div>Isso apaga contas, cartões, categorias e todos os lançamentos${anexosOk() ? ", inclusive os comprovantes (que não entram na cópia automática)" : ""}. ${S.sisOk ? `Por precaução, uma cópia fica guardada ${aqui()} (Cópias automáticas), mas ${tx("baixe", "salve")} um backup em arquivo se quiser guardar os dados.` : "Baixe um backup antes se quiser guardar algo."}</div>
       <div class="f"><label for="ap-c">Digite APAGAR para confirmar</label><input class="inp" id="ap-c" autocomplete="off"></div><div class="err" id="m-err"></div></form>
     <div class="mfoot"><span class="sp"></span><button class="btn" data-act="fechar">Cancelar</button><button class="btn danger" data-act="apagar-confirma">Apagar tudo</button></div>`, "sm");
   $("#f-apagar").addEventListener("submit", ev => { ev.preventDefault(); apagarTudo(); });

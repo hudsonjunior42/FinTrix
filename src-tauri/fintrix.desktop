@@ -1,0 +1,11 @@
+[Desktop Entry]
+Categories={{categories}}
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Exec={{exec}}
+StartupWMClass=io.github.hudsonjunior42.fintrix
+Icon=io.github.hudsonjunior42.fintrix
+Name={{name}}
+Terminal=false
+Type=Application

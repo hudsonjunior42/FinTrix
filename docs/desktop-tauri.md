@@ -30,6 +30,8 @@ As primeiras versões do protótipo usavam o identificador `br.com.fintrix.app`.
 - Comprovantes e cópias automáticas também vão para o SQLite cifrado (tabela `itens`, lojas `anexos` e `sistema/copias`): no app desktop, `anxTx` e `sisTx` usam `lojaTauri`, que imita o object store do IndexedDB. Os arquivos vão como bytes crus (`loja_gravar_bytes`, `loja_bytes`).
 - Backup, CSV, .zip e comprovantes são salvos pela janela "Salvar como" do sistema (`downloadsTauri` → comando `salvar_arquivo`, com `tauri-plugin-dialog`). A mensagem mostra o caminho escolhido.
 - `src-tauri`: a casca. Abre o banco (`Banco`), guarda e lê a chave no chaveiro (crate `keyring`), migra o identificador antigo e cria a janela.
+- **Ícone e uma instância só:** o nome do programa no GTK é o identificador (`glib::set_prgname`), que vira o app_id da janela no Wayland. O KDE e o GNOME acham o ícone pelo arquivo `.desktop` e pelo ícone com esse nome. O .deb e o AppImage trazem os dois; ao rodar o AppImage ou o executável solto, o app grava (ou atualiza) `~/.local/share/applications/io.github.hudsonjunior42.fintrix.desktop` e o ícone em `~/.local/share/icons/hicolor/256x256/apps/`, o que também põe o FinTrix no menu. Com `enableGTKAppId`, abrir o app de novo não cria uma segunda janela (duas gravando no mesmo banco perderiam dados).
+- **Textos:** no app desktop, `tx(web, desktop)` e `aqui()` trocam "navegador", "página" e "baixar" por "computador", "tela" e "salvar".
 - **Sem internet:** o `tools/tauri_prep.py` troca o Google Fonts por `assets/fonts/` (IBM Plex Sans, IBM Plex Mono, Bricolage Grotesque, licença SIL OFL 1.1) na cópia empacotada. A política de conteúdo (`csp` no `tauri.conf.json`) só permite arquivos do próprio app, `blob:`/`data:` para imagens e o canal do Tauri; qualquer pedido para fora é bloqueado.
 
 ## O que ainda não está coberto
@@ -42,10 +44,10 @@ As primeiras versões do protótipo usavam o identificador `br.com.fintrix.app`.
 
 ## Teste pela interface
 
-`python3 test/desktop.py` compila o app de debug e o abre várias vezes em pastas temporárias, com chaves geradas para o teste. As variáveis `FINTRIX_DADOS`, `FINTRIX_CHAVE`, `FINTRIX_TESTE` e `FINTRIX_SALVAR_EM` só valem no build de debug e não tocam no chaveiro real. Os roteiros ficam em `test/desktop/`: o app executa o roteiro na página e devolve o resultado pelo comando `teste_fim`. Precisa de tela.
+`python3 test/desktop.py` compila o app de debug e o abre várias vezes em pastas temporárias, com chaves geradas para o teste. As variáveis `FINTRIX_DADOS`, `FINTRIX_CHAVE`, `FINTRIX_TESTE` e `FINTRIX_SALVAR_EM` só valem no build de debug e não tocam no chaveiro real. Os roteiros ficam em `test/desktop/`: o app executa o roteiro na página e devolve o resultado pelo comando `teste_fim`. Precisa de tela, e o FinTrix precisa estar fechado (é uma instância só).
 
 1. Cria a conta, lança uma despesa com comprovante, guarda uma cópia automática e salva um backup pela tela de Configurações. Confere a fonte local e que um pedido para a internet é bloqueado.
-2. Reabre: dados, comprovante, cópia e .zip voltam do banco; a chave de recuperação aparece em Configurações; nenhum texto diz "neste navegador".
+2. Reabre: dados, comprovante, cópia e .zip voltam do banco; a chave de recuperação aparece em Configurações; Configurações, a janela de cópias e a de restaurar não falam em navegador, página, baixar ou download.
 3. Reabre sem a chave no chaveiro e depois com uma chave errada: o app pede a chave, recusa uma errada e abre com a certa digitada com hífens e em maiúsculas.
 4. Numa pasta nova, restaura o backup da etapa 1 pela apresentação.
 5. A pasta de dados tem permissão 700, o banco não tem o cabeçalho do SQLite e nenhum arquivo tem os textos lançados ou o conteúdo do comprovante em claro.
