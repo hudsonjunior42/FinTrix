@@ -1,6 +1,6 @@
 # App desktop (Tauri 2) — protótipo
 
-**Status: protótipo, ainda não compilado nem testado.** Escrito sem o toolchain Rust instalado; o primeiro `cargo test` e `cargo tauri dev` podem apontar ajustes (nomes de features do `keyring`, versões das crates).
+**Status: protótipo.** `cargo test -p fintrix-core` passa (5 testes) e `cargo build -p fintrix` compila. O app abre no Linux (WebKitGTK), cria o `fintrix.db` e o arquivo não tem o cabeçalho "SQLite format 3" (cifrado). Ainda não foi testado de ponta a ponta pela interface (criar conta, lançar, reabrir) nem no Windows, macOS ou Android.
 
 ## Como funciona
 
